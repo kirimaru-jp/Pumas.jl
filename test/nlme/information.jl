@@ -1,8 +1,13 @@
-using Pumas, LinearAlgebra
+using Pumas, LinearAlgebra, Test
+
+if !isdefined(Main, :PUMASMODELS)
+  include("testmodels/testmodels.jl")
+end
 
 @testset "Test informationmatrix with warfarin data" begin
 
-  data = read_pumas(example_data("warfarin"))
+  warfarin = PUMASMODELS["1cpt"]["oral"]["normal_additive"]["warfarin"]
+  data, model, param = warfarin["data"], warfarin["analytical"], warfarin["param"]
 
   model = @model begin
 
@@ -61,41 +66,8 @@ using Pumas, LinearAlgebra
 end
 
 @testset "Multiple dvs. (The HCV model)" begin
-  peg_inf_model = @model begin
-    # The "@param" block specifies the parameters
-    @param begin
-      # fixed effects paramters
-      logθKa   ∈  RealDomain()
-      logθKe   ∈  RealDomain()
-      logθVd   ∈  RealDomain()
-      logθn    ∈  RealDomain()
-      logθδ    ∈  RealDomain()
-      logθc    ∈  RealDomain()
-      logθEC50 ∈  RealDomain()
-      # random effects variance parameters, must be posisitive
-      ω²Ka   ∈ RealDomain(lower=0.0)
-      ω²Ke   ∈ RealDomain(lower=0.0)
-      ω²Vd   ∈ RealDomain(lower=0.0)
-      ω²n    ∈ RealDomain(lower=0.0)
-      ω²δ    ∈ RealDomain(lower=0.0)
-      ω²c    ∈ RealDomain(lower=0.0)
-      ω²EC50 ∈ RealDomain(lower=0.0)
-      # variance parameter in proportional error model
-      σ²PK ∈ RealDomain(lower=0.0)
-      σ²PD ∈ RealDomain(lower=0.0)
-    end
 
-    # The random block allows us to specify variances for, and covariances
-    # between, the random effects
-    @random begin
-      ηKa   ~ Normal(0.0, sqrt(ω²Ka))
-      ηKe   ~ Normal(0.0, sqrt(ω²Ke))
-      ηVd   ~ Normal(0.0, sqrt(ω²Vd))
-      ηn    ~ Normal(0.0, sqrt(ω²n))
-      ηδ    ~ Normal(0.0, sqrt(ω²δ))
-      ηc    ~ Normal(0.0, sqrt(ω²c))
-      ηEC50 ~ Normal(0.0, sqrt(ω²EC50))
-    end
+  hcv = PUMASMODELS["misc"]["HCV"]
 
     @pre begin
       # constants
