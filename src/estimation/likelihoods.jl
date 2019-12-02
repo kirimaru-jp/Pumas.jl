@@ -982,7 +982,7 @@ _∂²l∂η²(dv_d::Any,
         approx::LikelihoodApproximation) = throw(ArgumentError("Distribution is current not supported for the $approx approximation. Please consider a different likelihood approximation."))
 
 # Fitting methods
-struct FittedPumasModel{T1<:PumasModel,T2<:Population,T3,T4<:LikelihoodApproximation, T5, T6, T7, T8}
+struct FittedPumasModel{T1<:PumasModel,T2<:Population,T3,T4<:LikelihoodApproximation, T5, T6, T7, T8, T9<:Tuple}
   model::T1
   data::T2
   optim::T3
@@ -991,6 +991,7 @@ struct FittedPumasModel{T1<:PumasModel,T2<:Population,T3,T4<:LikelihoodApproxima
   args::T6
   kwargs::T7
   fixedtrf::T8
+  omegas::T9
 end
 
 struct DefaultOptimizeFN{A,K}
@@ -1036,7 +1037,7 @@ Replace individual parameter transformations in `trf` with `ConstantTranform` if
 the parameter has an entry in `fixed`. Return a new parameter `NamedTuple` with
 the values in `fixed` in place of the values in input `param`.
 """
-function _fixed_to_constanttransform(trf, param, fixed)
+function _fixed_to_constanttransform(trf, param, fixed, omegas)
   fix_keys = keys(fixed)
   _keys = keys(trf.transformations)
   _vals = []
@@ -1045,6 +1046,9 @@ function _fixed_to_constanttransform(trf, param, fixed)
     if key ∈ fix_keys
       push!(_vals, ConstantTransform(fixed[key]))
       push!(_paramval, fixed[key])
+    elseif key ∈ omegas
+      push!(_vals, ConstantTransform(param[key]))
+      push!(_paramval, param[key])
     else
       push!(_vals, trf.transformations[key])
       push!(_paramval, param[key])
@@ -1067,13 +1071,14 @@ function Distributions.fit(m::PumasModel,
                            # in zero. In addition, the returned object should support a opt_minimizer method
                            # that returns the optimized parameters.
                            optimize_fn = DefaultOptimizeFN(),
-                           constantcoef = NamedTuple(),
+                           constantcoef::NamedTuple = NamedTuple(),
+                           omegas::Tuple = tuple(),
                            kwargs...)
 
   # Compute transform object defining the transformations from NamedTuple to Vector while applying any parameter restrictions and apply the transformations
   trf = totransform(m.param)
-  fixedtrf=trf
-  param, fixedtrf = _fixed_to_constanttransform(trf, param, constantcoef)
+  fixedtrf = trf
+  param, fixedtrf = _fixed_to_constanttransform(trf, param, constantcoef, omegas)
   vparam = TransformVariables.inverse(fixedtrf, param)
 
   # We'll store the orthogonalized random effects estimate in vvrandeffsorth which allows us to carry the estimates from last
@@ -1141,7 +1146,7 @@ function Distributions.fit(m::PumasModel,
     end
   end
 
-  return FittedPumasModel(m, population, o, approx, vvrandeffsorth, args, kwargs, fixedtrf)
+  return FittedPumasModel(m, population, o, approx, vvrandeffsorth, args, kwargs, fixedtrf, omegas)
 end
 
 function Distributions.fit(m::PumasModel,

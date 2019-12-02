@@ -25,7 +25,13 @@ function Base.show(io::IO, mime::MIME"text/plain", fpm::FittedPumasModel)
   paramnames = []
   paramvals = []
   for (paramname, paramval) in pairs(coef(fpm))
-    _push_varinfo!(paramnames, paramvals, nothing, nothing, paramname, paramval, nothing, nothing)
+    if !(paramname ∈ fpm.omegas)
+      if fpm.fixedtrf.transformations[paramname] isa ConstantTransform
+        _push_varinfo!(paramnames, paramvals, nothing, nothing, paramname, paramval, nothing, nothing)
+      else
+        _push_varinfo!(paramnames, paramvals, nothing, nothing, paramname, paramval, nothing, nothing)
+      end
+    end
   end
   getdecimal = x -> findfirst(c -> c=='.', x)
   maxname = maximum(length, paramnames)
