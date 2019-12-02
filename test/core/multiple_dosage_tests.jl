@@ -35,7 +35,7 @@ m_analytic = @model begin
         CL = cl
         V  = v
     end
-    @dynamics OneCompartmentModel
+    @dynamics Depots1Central1 
 
     # we approximate the error by computing the conditional_nll
     @derived begin
@@ -63,3 +63,7 @@ sim_analytic = begin
     s = simobs(m_analytic,subject1,param,randeffs)[:dv]
 end
 @test sim_diffeq ≈ sim_analytic rtol=1e-3
+
+pop = Population(map(i -> Subject(id=i, time=i:20, cvs=subject1.covariates),1:3))
+s = simobs(m_diffeq,pop,param,randeffs)
+@test map(x->x.times, s) == map(x->x.time, pop)

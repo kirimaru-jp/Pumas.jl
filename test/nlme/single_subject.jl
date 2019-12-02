@@ -1,5 +1,5 @@
 using Test
-using Pumas, LinearAlgebra
+using Pumas
 
 data = read_pumas(example_data("sim_data_model1"))
 @testset "Single subject" begin
@@ -19,7 +19,7 @@ mdsl1 = @model begin
         conc = Central / V
     end
 
-    @dynamics ImmediateAbsorptionModel
+    @dynamics Central1
 
     @derived begin
         dv ~ @. Normal(conc,conc*sqrt(Σ)+eps())
@@ -28,7 +28,7 @@ end
 
 param = init_param(mdsl1)
 
-for approx in (Pumas.FO, Pumas.FOI, Pumas.FOCE, Pumas.FOCEI, Pumas.Laplace, Pumas.LaplaceI, Pumas.HCubeQuad)
+for approx in (Pumas.FO, Pumas.FOI, Pumas.FOCE, Pumas.FOCEI, Pumas.Laplace, Pumas.LaplaceI, Pumas.LLQuad)
     @test_throws ArgumentError fit(mdsl1, data[1], param, approx())
 end
 
@@ -49,7 +49,7 @@ model = @model begin
     V  = tvv * (wt/70)
     end
 
-    @dynamics ImmediateAbsorptionModel
+    @dynamics Central1
     #@dynamics begin
     #    Central' =  - (CL/V)*Central
     #end

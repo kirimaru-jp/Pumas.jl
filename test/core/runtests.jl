@@ -24,6 +24,8 @@
     include("multiresponses.jl") end
 @time @safetestset "DCP Rate Handling Tests" begin
     include("dcp_rate.jl") end
+@time @safetestset "Non-Constant Subject Type Tests" begin
+     include("non_constant_types.jl") end
 @time @safetestset "Type-Stability Tests" begin
     include("stability_tests.jl") end
 @time @safetestset "StaticArray Tests" begin
@@ -36,7 +38,5 @@
      include("error_handling.jl") end
 @time @safetestset "Automatic Differentiation Tests" begin
      include("ad_tests.jl") end
-
-# Do not put into a module because processes are spawned
-@time @testset "Parallelism Tests" begin
-     include("parallel.jl") end
+@time @safetestset "Analytical models" begin
+     include("analytical_models.jl") end

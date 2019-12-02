@@ -15,7 +15,7 @@ Pumas: A Pharmaceutical Modeling and Simulation toolkit
 ## Demo: A Simple PK model
 
 ```julia
-using Pumas, Plots, LinearAlgebra
+using Pumas, Plots
 ```
 
 For reproducibility, we will set a random seed:
@@ -48,7 +48,7 @@ model = @model begin
     V  = tvv * (wt/70) * exp(η[2])
   end
 
-  @dynamics ImmediateAbsorptionModel
+  @dynamics Central1
     #@dynamics begin
     #    Central' =  - (CL/V)*Central
     #end
@@ -196,19 +196,6 @@ julia> first(resout, 6)
 │ 6   │ 1      │ 0.0     │ 1     │ 74    │ 1344.63 │ 1679.77 │ FOCEI()     │ 0.273454 │ -0.638544 │ FOCEI()     │ -0.189025 │ -0.199515 │ FOCEI()     │
 ```
 
-### `validate` - `vpc`
-
-Finally validate your model with a visual predictive check
-
-```julia
-vpc(res,200) |> plot
-```
-![vpc](https://user-images.githubusercontent.com/1814174/62414967-8898bb00-b5f0-11e9-8358-de61ece4bdf2.png)
-
-or you can do a `vpc` into a new design as well.
-
-Plotting methods on model diagnostics are coming soon.
-
 ### Simulate from fitted model
 
 In order to simulate from a fitted model `simobs` can be used. The final parameters of the fitted models are available in the `coef(res)`
@@ -219,7 +206,7 @@ fitparam = coef(res)
 
 You can then pass these optimized parameters into a `simobs` call and pass the same dataset or simulate into a different design
 
-```
+```julia
 ev_sd_high_dose = DosageRegimen(200, time=0, addl=4, ii=48)
 s2 = Subject(id=1,  evs=ev_sd_high_dose, cvs=(isPM=1, wt=70))
 ```
@@ -229,4 +216,48 @@ obs = simobs(model, s2, fitparam, obstimes=0:1:160)
 plot(obs)
 ```
 ![highdose](https://user-images.githubusercontent.com/1814174/62414975-a8c87a00-b5f0-11e9-9176-10fe37aef986.png)
+
+## Visualization
+
+There are several plot recipes you can use to visualize your model fit.  These are mainly provided by the [`PumasPlots.jl`](https://github.com/PumasAI/PumasPlots.jl) package (currently unregistered, add via URL).
+
+PumasPlots provides recipes to visualize `FittedPumasModel`s, and also has powerful grouping functionality.  While some plot types are specialized for fitted models, you can use all of Plots' features by converting your result to a DataFrame (using `DataFrame(inspect(res))`).
+
+- `convergence(res::FittedPumasModel)` - plots the optimization trajectory of all variables.
+    ```julia
+    convergence(res)
+    ```
+    ![convergence](https://user-images.githubusercontent.com/32143268/64719839-1ccf2b00-d497-11e9-9b3f-98730295bc36.png)
+
+- `etacov(res::FittedPumasModel)` - plots the covariates of the model against the etas.  Keyword arguments are described in the docstring - essentially, you can use any column in `DataFrame(inspect(res))` to plot.  
+    ```julia
+    etacov(res; catmap = (isPM = true,))
+    ```
+    ![etacov](https://user-images.githubusercontent.com/32143268/64719841-1ccf2b00-d497-11e9-84fe-e4efc35f7c0c.png)
+
+
+- `resplot(res::FittedPumasModel)` - plots the covariates of the model against their residuals, determined by the approximation type.  Accepts many of the same kwargs as `etacov`.
+    ```julia
+    resplot(res; catmap = (isPM = true,))
+    ```
+    ![resplot](https://user-images.githubusercontent.com/32143268/64719842-1ccf2b00-d497-11e9-9f94-43fcd170f5b5.png)    
+
+- `corrplot(empirical_bayes(res); labels)` - overload of the `StatsPlots` corrplot, for etas.
+    ```julia
+    corrplot(empirical_bayes(res); labels = ["eta_1", "eta_2"])
+    ```
+    ![corrplot](https://user-images.githubusercontent.com/32143268/64719840-1ccf2b00-d497-11e9-8bc5-e961a60d628a.png)
+
+Most of these plotting functions have docstrings, which can be accessed in the REPL help mode by `>? resplot` (for example).
+
+In addition to these specialized plots, PumasPlots offers powerful grouping functionality.  By working with the DataFrame of your results (`DataFrame(inspect(res))`), you can create arbitrary plots, and by using the `plot_grouped` function, you can create panelled (a.k.a. grouped) plots.
+
+```julia
+df = DataFrame(inspect(res))
+gdf = groupby(df, :isPM) # group by categorical covariate
+
+plot_grouped(gdf) do subdf # `plot_grouped` will iterate through the groups of `gdf`
+    boxplot(subdf.wt, subdf.wres; xlabel = :wt, ylabel = :wres, legend = :none) # you can use any arbitrary plotting function here
+end
 ```
+![groupedboxplot](https://user-images.githubusercontent.com/32143268/64720345-4177d280-d498-11e9-8bea-6270e8d227b9.png)

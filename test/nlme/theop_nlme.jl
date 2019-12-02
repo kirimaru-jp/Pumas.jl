@@ -1,5 +1,5 @@
 using Test
-using Pumas, LinearAlgebra
+using Pumas
 
 theopp_nlme = read_pumas(example_data("THEOPP"))
 
@@ -30,7 +30,7 @@ mdsl2 = @model begin
         conc = Central / V
     end
 
-    @dynamics OneCompartmentModel
+    @dynamics Depots1Central1 
 
     @derived begin
         dv ~ @. Normal(conc, sqrt(conc^2 *Σ.diag[1] + Σ.diag[end]) + eps())
@@ -39,19 +39,22 @@ end
 
 param = init_param(mdsl2)
 @test @inferred(deviance(mdsl2, theopp_nlme, param, Pumas.LaplaceI())) ≈ 93.64166638742198 rtol = 1e-6 # NONMEM result
-@test fit(mdsl2, theopp_nlme, param, Pumas.FOCE()) isa Pumas.FittedPumasModel
+@test_throws ArgumentError fit(mdsl2, theopp_nlme, param, Pumas.FOCE())
+ft_focei = fit(mdsl2, theopp_nlme, param, Pumas.FOCEI())
+@test ft_focei isa Pumas.FittedPumasModel
 @test ηshrinkage(mdsl2, theopp_nlme, param, Pumas.FOCEI()).η ≈ [0.0161871, 0.0502453, 0.0133019] rtol = 1e-5
-@test ϵshrinkage(mdsl2, theopp_nlme, param, Pumas.FOCEI()) ≈ 0.09091845 rtol = 1e-6
-ϵshrinkage(mdsl2,theopp_nlme, param, Pumas.FOCE(),
-    [Pumas._orth_empirical_bayes(mdsl2, subject, param, Pumas.FOCEI()) for subject in theopp_nlme])
-param = coef(fit(mdsl2, theopp_nlme, param, Pumas.FOCE()))
+@test ϵshrinkage(mdsl2, theopp_nlme, param, Pumas.FOCEI()).dv ≈ 0.09091845 rtol = 1e-6
+ϵshrinkage(mdsl2,theopp_nlme, param, Pumas.FOCEI(),
+    [Pumas._orth_empirical_bayes(mdsl2, subject, param, Pumas.FOCEI()) for subject in theopp_nlme]).dv
+param = coef(ft_focei)
 @test ϵshrinkage(mdsl2, theopp_nlme, param, Pumas.FOCEI(),
-    [Pumas._orth_empirical_bayes(mdsl2, subject, param, Pumas.FOCE()) for subject in theopp_nlme]) ≈ 0.4400298 rtol = 1e-3
-@test ϵshrinkage(mdsl2, theopp_nlme, param, Pumas.FOCE()) ≈ 0.1268684 rtol = 1e-3
-@test aic(mdsl2, theopp_nlme, param, Pumas.FOCEI()) ≈ 477.5715543243326 rtol = 1e-3 #regression test
-@test bic(mdsl2, theopp_nlme, param, Pumas.FOCEI()) ≈ 509.2823754727827 rtol = 1e-3 #regression test
+    [Pumas._orth_empirical_bayes(mdsl2, subject, param, Pumas.FOCEI()) for subject in theopp_nlme]).dv ≈ 0.09091976569587323 rtol = 1e-3
+@test ϵshrinkage(mdsl2, theopp_nlme, param, Pumas.FOCEI()).dv ≈ 0.09091976569587323 rtol = 1e-3
+@test aic(mdsl2, theopp_nlme, param, Pumas.FOCEI()) ≈ 357.43064186213104 rtol = 1e-3 #regression test
+@test bic(mdsl2, theopp_nlme, param, Pumas.FOCEI()) ≈ 389.1414630105811 rtol = 1e-3 #regression test
 param = init_param(mdsl2)
 randeffsorth = [Pumas._orth_empirical_bayes(mdsl2, subject, param, Pumas.FOCEI()) for subject in theopp_nlme]
-@test [Pumas.ipred(mdsl2, subject, param, randeff) for (subject, randeff) in zip(theopp_nlme, randeffsorth)]   isa Vector # FIXME! come up with a better test
-@test [Pumas.cipred(mdsl2, subject, param, randeff) for (subject, randeff) in zip(theopp_nlme, randeffsorth)]  isa Vector # FIXME! come up with a better test
-@test [Pumas.cipredi(mdsl2, subject, param, randeff) for (subject, randeff) in zip(theopp_nlme, randeffsorth)] isa Vector # FIXME! come up with a better test
+@test [Pumas.ipred(mdsl2, subject, param, randeff).dv for (subject, randeff) in zip(theopp_nlme, randeffsorth)]   isa Vector # FIXME! come up with a better test
+@test [Pumas.cipred(mdsl2, subject, param, randeff).dv for (subject, randeff) in zip(theopp_nlme, randeffsorth)]  isa Vector # FIXME! come up with a better test
+@test [Pumas.cipredi(mdsl2, subject, param, randeff).dv for (subject, randeff) in zip(theopp_nlme, randeffsorth)] isa Vector # FIXME! come up with a better test
+@test residuals(ft_focei) isa Vector{<:NamedTuple} # FIXME! come up with a better test

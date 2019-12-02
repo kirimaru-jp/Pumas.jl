@@ -1,4 +1,4 @@
-using Pumas, Test, LinearAlgebra
+using Pumas, Test
 
 @testset "Test with missing values" begin
 
@@ -31,7 +31,7 @@ using Pumas, Test, LinearAlgebra
         conc = Central / V
     end
 
-    @dynamics ImmediateAbsorptionModel
+    @dynamics Central1
 
     @derived begin
         dv ~ @. Normal(conc, σ)
@@ -58,7 +58,7 @@ using Pumas, Test, LinearAlgebra
         conc = Central / V
     end
 
-    @dynamics ImmediateAbsorptionModel
+    @dynamics Central1
 
     @derived begin
         dv ~ @. Normal(conc, conc*σ)
@@ -85,7 +85,7 @@ using Pumas, Test, LinearAlgebra
         conc = Central / V
     end
 
-    @dynamics ImmediateAbsorptionModel
+    @dynamics Central1
 
     @derived begin
         dv ~ @. LogNormal(log(conc), σ)
@@ -98,10 +98,13 @@ using Pumas, Test, LinearAlgebra
     _model in ("additive", "proportional", "exponential"),
       _approx in (Pumas.FO(), Pumas.FOCE(), Pumas.FOCEI(), Pumas.Laplace(), Pumas.LaplaceI())
 
-    if _model == "proportional" && _approx == Pumas.LaplaceI()
-      # Hessian in random effects beecome indfinite
-      @test_broken fit(model[_model], data, param, _approx) isa Pumas.FittedPumasModel
-    else
+    if _model == "proportional" && _approx == Pumas.FOCE()
+      @test_throws ArgumentError deviance(model[_model], data, param, _approx)
+      continue
+    end
+    # LaplaceI and proportional is very unstable and succeeds/fails depending on architecture
+    # so we can't mark this as @test_broken
+    if _model != "proportional" || _approx != Pumas.LaplaceI()
       @test deviance(fit(model[_model], data, param, _approx)) == deviance(fit(model[_model], data_missing, param, _approx))
     end
   end

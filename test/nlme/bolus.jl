@@ -1,4 +1,4 @@
-using Pumas, LinearAlgebra, Test, CSV
+using Pumas, Test, CSV
 
 @testset "One compartment intravenous bolus study" begin
   #No. of subjects= 100, Dose = 100 or 250mg,DV=Plasma concentration, ug/ml
@@ -33,7 +33,7 @@ using Pumas, LinearAlgebra, Test, CSV
         conc = Central / V
       end
 
-      @dynamics ImmediateAbsorptionModel
+      @dynamics Central1
 
       @derived begin
         dv ~ @. Normal(conc, abs(conc)*sqrt(σ_prop))
@@ -85,12 +85,7 @@ using Pumas, LinearAlgebra, Test, CSV
     end
 
     @testset "FOCE estimation of $dyntype model" for dyntype in ("analytical", "solver")
-      result = fit(mdl_proportional[dyntype], data, param_proportional, Pumas.FOCE())
-      param = coef(result)
-
-      @test param.θ      ≈ [3.19e-01, 9.22e+00] rtol=1e-3
-      @test param.Ω.diag ≈ [2.28e-01, 2.72e-01] rtol=1e-3
-      @test param.σ_prop ≈ 9.41e-02 rtol=1e-3
+      @test_throws ArgumentError deviance(mdl_proportional[dyntype], data, param_proportional, Pumas.FOCE())
     end
 
     @testset "FOCEI estimation of $dyntype model" for dyntype in ("analytical", "solver")
@@ -149,7 +144,7 @@ using Pumas, LinearAlgebra, Test, CSV
        conc = Central / V
       end
 
-      @dynamics ImmediateAbsorptionModel
+      @dynamics Central1
 
       @derived begin
        dv ~ @. Normal(conc, sqrt(conc^2*σ_prop + σ_add))
@@ -204,13 +199,7 @@ using Pumas, LinearAlgebra, Test, CSV
     end
 
     @testset "FOCE estimation of $dyntype model" for dyntype in ("analytical", "solver")
-      result = fit(mdl_proportional_additive[dyntype], data, param_proportional_additive, Pumas.FOCE())
-      param = coef(result)
-
-      @test param.θ      ≈ [4.12e-01, 7.20e+00] rtol=1e-3
-      @test param.Ω.diag ≈ [1.73e-01, 2.02e-01] rtol=5e-3
-      @test param.σ_add  ≈ 7.32e+00             rtol=1e-3
-      @test param.σ_prop ≈ 2.41e-02             rtol=1e-3
+      @test_throws ArgumentError deviance(mdl_proportional_additive[dyntype], data, param_proportional_additive, Pumas.FOCE())
     end
 
     @testset "FOCEI estimation of $dyntype model" for dyntype in ("analytical", "solver")

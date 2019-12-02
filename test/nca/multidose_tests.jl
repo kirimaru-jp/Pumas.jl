@@ -2,7 +2,7 @@ using Pumas.NCA, Test, CSV
 using Pumas
 
 multiple_doses_file = Pumas.example_data("nca_test_data/dapa_IV_ORAL")
-mdata = CSV.read(multiple_doses_file)
+mdata = copy(CSV.read(multiple_doses_file))
 msol = CSV.read(Pumas.example_data("nca_test_data/dapa_IV_ORAL_sol"))
 
 timeu = u"hr"
@@ -10,8 +10,12 @@ concu = u"mg/L"
 amtu  = u"mg"
 mdata[!,:route] .= map(f -> f=="ORAL" ? "ev" : "iv", mdata.FORMULATION)
 mdata[!,:ii] .= 24
+didxs = findall(x->!ismissing(x) && !iszero(x), mdata.AMT)
+mdata[rand(didxs), :AMT] = 10
+
 mncapop = @test_nowarn read_nca(mdata, id=:ID, time=:TIME, conc=:COBS, amt=:AMT, route=:route, occasion=:OCC,
                                      timeu=timeu, concu=concu, amtu=amtu)
+@test ustrip.(NCA.doseamt(mncapop)[!, end]) == mdata[didxs, :AMT]
 
 @test_throws ArgumentError NCA.interpextrapconc(mncapop[1], 22timeu, method=:linear)
 
@@ -51,9 +55,13 @@ lambdazdf = @test_nowarn NCA.lambdaz(mncapop)
 ncareport1 = NCAReport(mncapop[1])
 @test_nowarn ncareport1
 @test_skip display(NCA.to_markdown(ncareport1))
-@test_nowarn NCA.to_dataframe(ncareport1)
+@test_nowarn DataFrame(ncareport1)
 
 popncareport = NCAReport(mncapop)
+NCA.cleancache!(mncapop)
+@test all(i->all(x->x == 0, mncapop[i].points), eachindex(mncapop))
+@test all(i->all(x->x == -oneunit(mncapop[i].auc_last[1]), mncapop[i].auc_last), eachindex(mncapop))
+@test all(i->all(x->x == -oneunit(mncapop[i].aumc_last[1]), mncapop[i].aumc_last), eachindex(mncapop))
 @test_skip display(NCA.to_markdown(popncareport))
 df = @test_nowarn NCA.to_dataframe(popncareport)
 @test count(!ismissing, df.cl_obs) == 24
@@ -63,6 +71,15 @@ df = @test_nowarn NCA.to_dataframe(popncareport)
 popncareport = NCAReport(mncapop, sigdigits=2)
 df = @test_nowarn NCA.to_dataframe(popncareport)
 @test df.lambda_z[2] == round(ustrip(df.lambda_z[2]), sigdigits=2)*oneunit(df.lambda_z[2])
+
+# check retcode
+mdata2 = mdata[1:1522, :]
+mncapop2 = @test_nowarn read_nca(mdata2, id=:ID, time=:TIME, conc=:COBS, amt=:AMT, route=:route, occasion=:OCC,
+                                     timeu=timeu, concu=concu, amtu=amtu)
+@test NCA.lambdaz(mncapop2, verbose=false)[end, end] === missing
+@test NCA.retcode(mncapop2)[end, end] === :NotEnoughDataAfterCmax
+@test NCA.lambdaz(mncapop2, verbose=false)[end, end] === missing
+@test NCA.retcode(mncapop2)[end, end] === :NotEnoughDataAfterCmax
 
 data1 = CSV.read(IOBuffer("""
   id,time,tad,conc,amt,occasion,formulation

@@ -1,12 +1,11 @@
 using Test, SafeTestsets
-using Pumas, LinearAlgebra, Optim, StatsBase
+using Pumas, StatsBase
 
 if group == "All" || group == "NLME_Basic"
-  @time @safetestset "Types (constructors, api, etc...)"             begin include("types.jl")                  end
-end
-
-if group == "All" || group == "NLME_Naive"
-  @time @safetestset "Naive estimation"                              begin include("single_subject.jl")                  end
+  @time @safetestset "Maximum-likelihood interface" begin
+    @time @safetestset "Types (constructors, api, etc...)"           begin include("types.jl")                     end
+    @time @safetestset "Naive estimation"                            begin include("single_subject.jl")            end
+  end
 end
 
 if group == "All" || group == "NLME_ML1"
@@ -18,15 +17,16 @@ if group == "All" || group == "NLME_ML1"
     @time @safetestset "Theophylline NLME.jl"                        begin include("theop_nlme.jl")                end
     @time @safetestset "Theophylline"                                begin include("theophylline.jl")              end
     @time @safetestset "Wang"                                        begin include("wang.jl")                      end
-    @time @safetestset "Poisson"                                     begin include("poisson_model.jl")             end
-    @time @safetestset "Information matrix"                          begin include("information.jl")               end
-    @time @safetestset "Missing observations"                        begin include("missings.jl")                  end
   end
 end
 
 if group == "All" || group == "NLME_ML2"
   @time @safetestset "Maximum-likelihood models 2" begin
+    @time @safetestset "Poisson"                                     begin include("poisson_model.jl")             end
     @time @safetestset "Bolus"                                       begin include("bolus.jl")                     end
+    @time @safetestset "Information matrix"                          begin include("information.jl")               end
+    @time @safetestset "Missing observations"                        begin include("missings.jl")                  end
+    @time @safetestset "Global Sensitivity Analysis"                 begin include("gsa.jl")                       end
   end
 end
 

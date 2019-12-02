@@ -1,5 +1,7 @@
 using Test
-using Pumas, LinearAlgebra, Optim
+using Pumas
+
+@testset "T-distributed error model" begin
 
 data = read_pumas(example_data("sim_data_model1"))
 
@@ -25,7 +27,7 @@ tdist = @model begin
         conc = Central / V
     end
 
-    @dynamics ImmediateAbsorptionModel
+    @dynamics Central1
 
     @derived begin
         dv ~ @. LocationScale(conc, conc*sqrt(σ²), TDist(30))
@@ -39,7 +41,7 @@ for (d, v) in zip(data, [-0.110095703125000, 0.035454025268555, -0.0249826049804
                          -0.085317642211914, 0.071675025939941, 0.059612709045410,
                          -0.110117317199707, -0.024778854370117, -0.053085464477539,
                          -0.002428230285645])
-  @test (sqrt(param.Ω)*Pumas._orth_empirical_bayes(tdist, d, param, Pumas.LaplaceI()))[1] ≈ v rtol=1e-4
+  @test (sqrt(param.Ω)*Pumas._orth_empirical_bayes(tdist, d, param, Pumas.LaplaceI()))[1] ≈ v rtol=1e-3
 end
 
 # Not yet supported
@@ -47,3 +49,5 @@ end
 @test_throws ArgumentError deviance(tdist, data, param, Pumas.FOCE())
 @test_throws ArgumentError deviance(tdist, data, param, Pumas.FOCEI())
 @test deviance(tdist, data, param, Pumas.LaplaceI()) ≈ 57.112537604068990 rtol=1e-6
+
+end

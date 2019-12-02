@@ -1,5 +1,5 @@
 using Test
-using Pumas, LinearAlgebra, Optim, CSV
+using Pumas, CSV
 
 @testset "Models from the Wang paper" begin
 
@@ -32,7 +32,7 @@ using Pumas, LinearAlgebra, Optim, CSV
         conc = Central / V
       end
 
-      @dynamics ImmediateAbsorptionModel
+      @dynamics Central1
 
       @derived begin
         dv ~ @. Normal(conc, sqrt(σ²))
@@ -67,7 +67,7 @@ using Pumas, LinearAlgebra, Optim, CSV
         conc = Central / V
       end
 
-      @dynamics ImmediateAbsorptionModel
+      @dynamics Central1
 
       @derived begin
         dv ~ @. Normal(conc, conc*sqrt(σ²))
@@ -77,7 +77,7 @@ using Pumas, LinearAlgebra, Optim, CSV
     param = init_param(wang_proportional)
 
     @test deviance(wang_proportional, data, param, Pumas.FO())    ≈ 39.213 atol = 1e-3
-    @test deviance(wang_proportional, data, param, Pumas.FOCE())  ≈ 39.207 atol = 1e-3
+    @test_throws ArgumentError deviance(wang_proportional, data, param, Pumas.FOCE())
     @test deviance(wang_proportional, data, param, Pumas.FOCEI()) ≈ 39.458 atol = 1e-3
   end
 
@@ -102,17 +102,17 @@ using Pumas, LinearAlgebra, Optim, CSV
         conc = Central / V
       end
 
-      @dynamics ImmediateAbsorptionModel
+      @dynamics Central1
 
       @derived begin
         dv ~ @. LogNormal(log(conc), sqrt(σ²))
       end
     end
 
-    # NONMEM computes the exponential error modeel differently. In stead of deriving the FO/FOCE(I)
-    # approximations from the Laplace approximation, NONMEM's version is based on linearization. the
-    # two approaches are only equivalent when the modal is Gaussian. Hence we test by log transforming
-    # the model
+    # NONMEM computes the exponential error model differently. Instead of deriving the
+    # FO/FOCE(I) approximations from the Laplace approximation, NONMEM's version is based
+    # on linearization. The two approaches are only equivalent when the model is Gaussian.
+    # Hence we test by log transforming the model
 
     # First we load a new verison of data and log transform dv
     _df = CSV.read(example_data("wang"))
@@ -146,7 +146,7 @@ using Pumas, LinearAlgebra, Optim, CSV
         conc = Central / V
       end
 
-      @dynamics ImmediateAbsorptionModel
+      @dynamics Central1
 
       @derived begin
         dv ~ @. Normal(log(conc), sqrt(σ²))

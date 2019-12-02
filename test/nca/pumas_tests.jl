@@ -1,5 +1,4 @@
 using Pumas
-using LinearAlgebra
 
 choose_covariates() = (isPM = rand([1, 0]),
                        Wt = rand(55:80))
@@ -58,14 +57,24 @@ p = (  θ = [1.5,  #Ka
     )
 
 
-sim = @test_nowarn simobs(m_diffeq, ev2, p; abstol=1e-14, reltol=1e-14, parallel_type=Pumas.Serial)
-for i in eachindex(sim.sims)
-  @test NCA.auc(sim[i].observed.cp, sim[i].times) === sim[i].observed.auc
+sim = @test_nowarn simobs(m_diffeq, ev2, p; abstol=1e-14, reltol=1e-14)
+for i in eachindex(sim)
+  @test NCA.auc(sim[i].observed.cp, sim[i].times)   === sim[i].observed.auc
   @test NCA.thalf(sim[i].observed.cp, sim[i].times) === sim[i].observed.thalf
-  @test NCA.cmax(sim[i].observed.cp, sim[i].times) === sim[i].observed.cmax
+  @test NCA.cmax(sim[i].observed.cp, sim[i].times)  === sim[i].observed.cmax
+
+  ncasubj = NCASubject(
+    Subject(
+      id   = 1,
+      obs  = (dv=sim[i].observed.cp,),
+      time = sim[i].times,
+      evs  = sim[i].subject.events))
+  @test NCA.auc(ncasubj)   === sim[i].observed.auc
+  @test NCA.thalf(ncasubj) === sim[i].observed.thalf
+  @test NCA.cmax(ncasubj)  === sim[i].observed.cmax
 end
 
-pop = Population(map(i->sim.sims[i].subject, eachindex(sim.sims)))
+pop = Population(map(i->sim[i].subject, eachindex(sim)))
 @test_nowarn NCAPopulation(pop, name=:cp, verbose=false)
 @test_nowarn NCASubject(pop[1], name=:cp)
 @test NCADose(ev2[1].events[1]) === NCADose(0.0, 100.0, 0.0, NCA.IVBolus)
@@ -121,7 +130,7 @@ p = (  θ = [11.5,  #CL
 sim = @test_nowarn simobs(parmet, ev1, p)
 @test_nowarn DataFrame(sim)
 dose = NCADose.(sim[1].subject.events)
-for i in eachindex(sim.sims)
+for i in eachindex(sim)
   subjcp = NCASubject(sim[i].observed.cp, sim[i].times, dose=dose, clean=false)
   subjcm = NCASubject(sim[i].observed.cm, sim[i].times, dose=dose, clean=false)
   @test NCA.auc(subjcp) == sim[i].observed.auccp
@@ -132,7 +141,7 @@ for i in eachindex(sim.sims)
   @test NCA.cmax(subjcm) == sim[i].observed.cmaxcm
 end
 
-pop = Population(map(i->sim.sims[i].subject, eachindex(sim.sims)))
+pop = Population(map(i->sim[i].subject, eachindex(sim)))
 @test_nowarn NCAPopulation(pop, name=:cp, verbose=false)
 @test_nowarn NCASubject(pop[1], name=:cp)
 @test NCADose(ev1[1].events[1]) === NCADose(0.0, 2000.0, 0.0, NCA.IVBolus)
