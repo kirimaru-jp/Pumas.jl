@@ -108,7 +108,7 @@ end
             conc = Central / V
         end
 
-        @dynamics ImmediateAbsorptionModel
+        @dynamics Central1
 
         @derived begin
             dv ~ @. Normal(conc,conc*sqrt(Σ)+eps())
@@ -129,7 +129,7 @@ end
             conc = Central / V
         end
 
-        @dynamics ImmediateAbsorptionModel
+        @dynamics Central1
 
         @derived begin
             dv ~ @. Normal(conc,conc*sqrt(Σ)+eps())
@@ -140,5 +140,6 @@ end
     param_noeta = init_param(mdsl1_noeta)
     fitone = fit(mdsl1_noeta, first(data), param_noeta)
     fitone = fit(mdsl1, first(data), param; constantcoef=(Ω=[0.0],))
+    fitone = fit(mdsl1, first(data), param; omegas=(:Ω,))
 
 end
