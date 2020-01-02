@@ -92,13 +92,12 @@ struct SAEMLogDensity{M,D,B,C,R,A,K}
     b.chain
   end
   
-  function M_step(m, population, fixeffs, randeffs_vec, i, gamma, Qs)
-    if i == 1
-      Qs[i] = sum(-conditional_nll(m, subject, fixeffs, (η = randeff, )) for (subject,randeff) in zip(population,randeffs_vec[1]))
-    elseif Qs[i] == -Inf
-      Qs[i] = M_step(m, population, fixeffs, randeffs_vec, i-1, gamma, Qs) + (gamma)*(sum(sum(-conditional_nll(m, subject, fixeffs, (η = randeff,))  for (subject,randeff) in zip(population, randeffs)) for randeffs in randeffs_vec[i]) -  M_step(m, population, fixeffs, randeffs_vec, i-1, gamma, Qs))
+  function M_step(m, population, fixeffs, randeffs_vec, i, nsamples, gamma, Qs)
+    if i == 1 
+        return sum(sum(-conditional_nll(m, subject, fixeffs, (η = randeff, )) for (subject,randeff) in zip(population,randeffs)) for randeffs in randeffs_vec[1])/nsamples
+    else
+        return M_step(m, population, fixeffs, randeffs_vec, i-1, gamma, Qs) + (gamma)*(sum(sum(-conditional_nll(m, subject, fixeffs, (η = randeff,))  for (subject,randeff) in zip(population, randeffs)) for randeffs in randeffs_vec[i])/nsamples -  M_step(m, population, fixeffs, randeffs_vec, i-1, gamma, Qs))
     end
-    return Qs[i]
   end
   
   function Distributions.fit(m::PumasModel, population::Population, param::NamedTuple, approx::SAEM, vrandeffs::AbstractVector, nsamples=50, args...; kwargs...)
@@ -115,9 +114,10 @@ struct SAEMLogDensity{M,D,B,C,R,A,K}
         push!(eta_vec,[eta[k][j:j+dimrandeff-1] for j in 1:dimrandeff:length(eta[k])])
       end
       t_param = Pumas.totransform(m.param)
-      Qs = vcat(Qs,[-Inf for i in 1:length(eta)])
-      cost = fixeffs -> M_step(m, population, TransformVariables.transform(trf, fixeffs), eta_vec, i, 1, Qs)
+      push!(Qs,-Inf)
+      cost = fixeffs -> M_step(m, population, TransformVariables.transform(trf, fixeffs), eta_vec, i, nsamples, 1/i, Qs)
       opt = Optim.optimize(cost, vparam)
+      println(opt)
       vparam = Optim.minimizer(opt)
       vrandeffs = eta[end]
       println(vrandeffs)
