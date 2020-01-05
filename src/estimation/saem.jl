@@ -11,7 +11,7 @@ struct SAEMLogDensity{M,D,B,C,R,A,K}
     args::A
     kwargs::K
   end
-  
+
   function SAEMLogDensity(model, data, fixeffs, args...;kwargs...)
     n = Pumas.dim_rfx(model)
     buffer = zeros(n)
@@ -20,16 +20,15 @@ struct SAEMLogDensity{M,D,B,C,R,A,K}
     res = DiffResults.GradientResult(buffer)
     SAEMLogDensity(model, data, n, param, buffer, cfg, res, args, kwargs)
   end
-  
+
   function dimension(b::SAEMLogDensity)
     b.dim_rfx * length(b.data)
   end
-  
+
   function logdensity(b::SAEMLogDensity, v::AbstractVector)
     n = b.dim_rfx
-    t_param = totransform(b.model.param)
-    rfx = b.model.random(b.param)
-    t_rfx = totransform(rfx)
+    t_param = Pumas.totransform(b.model.param)
+    param = TransformVariables.transform(t_param, b.param)
     ℓ_rfx = sum(enumerate(b.data)) do (i, subject)
         # compute the random effect density and likelihood
         return -Pumas.penalized_conditional_nll(b.model, subject, param, v, b.args...; b.kwargs...)
@@ -37,7 +36,7 @@ struct SAEMLogDensity{M,D,B,C,R,A,K}
     ℓ = ℓ_rfx
     return isnan(ℓ) ? -Inf : ℓ
   end
-  
+
   function logdensitygrad(b::SAEMLogDensity, v::AbstractVector)
     ∇ℓ = zeros(size(v))
     n = b.dim_rfx
@@ -63,17 +62,17 @@ struct SAEMLogDensity{M,D,B,C,R,A,K}
     end
     return isnan(ℓ) ? -Inf : ℓ, ∇ℓ
   end
-   
+
   struct SAEMMCMCResults{L<:SAEMLogDensity,C,T}
     loglik::L
     chain::C
     tuned::T
   end
-  
-  struct SAEM <: Pumas.LikelihoodApproximation 
+
+  struct SAEM <: Pumas.LikelihoodApproximation
     num_reopt_theta::Integer
   end
-  
+
   function E_step(model::PumasModel, data::Population, param::NamedTuple, nsamples=50, args...; nadapts = 200, kwargs...)
     trf_ident = toidentitytransform(m.param)
     E_step(model, data, TransformVariables.inverse(t_param, fixeffs), nsamples, args...; nadapts = nadapts, kwargs...)
@@ -91,15 +90,15 @@ struct SAEMLogDensity{M,D,B,C,R,A,K}
     b = SAEMMCMCResults(bayes, samples, stats)
     b.chain
   end
-  
+
   function M_step(m, population, fixeffs, randeffs_vec, i, nsamples, gamma, Qs)
-    if i == 1 
-        return sum(sum(-conditional_nll(m, subject, fixeffs, (η = randeff, )) for (subject,randeff) in zip(population,randeffs)) for randeffs in randeffs_vec[1])/nsamples
+    if i == 1
+        return sum(sum(conditional_nll(m, subject, fixeffs, (η = randeff, )) for (subject,randeff) in zip(population,randeffs)) for randeffs in randeffs_vec[1])/nsamples
     else
-        return M_step(m, population, fixeffs, randeffs_vec, i-1, gamma, Qs) + (gamma)*(sum(sum(-conditional_nll(m, subject, fixeffs, (η = randeff,))  for (subject,randeff) in zip(population, randeffs)) for randeffs in randeffs_vec[i])/nsamples -  M_step(m, population, fixeffs, randeffs_vec, i-1, gamma, Qs))
+        return M_step(m, population, fixeffs, randeffs_vec, i-1, nsamples, gamma, Qs) + (gamma)*(sum(sum(conditional_nll(m, subject, fixeffs, (η = randeff,))  for (subject,randeff) in zip(population, randeffs)) for randeffs in randeffs_vec[i])/nsamples -  M_step(m, population, fixeffs, randeffs_vec, i-1, nsamples, gamma, Qs))
     end
   end
-  
+
   function Distributions.fit(m::PumasModel, population::Population, param::NamedTuple, approx::SAEM, vrandeffs::AbstractVector, nsamples=50, args...; kwargs...)
     trf_ident = Pumas.toidentitytransform(m.param)
     trf = Pumas.totransform(m.param)
