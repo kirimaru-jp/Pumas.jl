@@ -216,21 +216,36 @@ function _orth_empirical_bayes!(
   param::NamedTuple,
   approx::Union{FOCE,FOCEI,LaplaceI},
   args...;
-  # We explicitly use reltol to compute the right step size for finite difference based gradient
-  reltol=DEFAULT_ESTIMATION_RELTOL,
-  fdtype=Val{:central}(),
-  fdrelstep=_fdrelstep(m, param, reltol, fdtype),
   kwargs...)
 
-  cost = vηorth -> penalized_conditional_nll(
-    m,
-    subject,
-    param,
-    vηorth,
-    approx,
-    args...;
-    reltol=reltol,
-    kwargs...)
+  function _fgh!(F, G, H, x)
+    if G !== nothing || H !== nothing
+      _∂²l∂η² = ∂²l∂η²(m, subject, param, x, approx, args...; kwargs...)
+      if G !== nothing
+        fill!(G, 0)
+      end
+      if H !== nothing
+        fill!(H, 0)
+      end
+      f = zero(first(_∂²l∂η²)[1])
+      for key in keys(_∂²l∂η²)
+        _∂²l∂η²_key = _∂²l∂η²[key]
+        f += _∂²l∂η²_key[1]
+        if G !== nothing
+          G .+= _∂²l∂η²_key[2] .+ x
+        end
+        if H !== nothing
+          H .+= _∂²l∂η²_key[3] + I
+        end
+      end
+      return f + x'x/2
+    end
+    if F !== nothing
+      return penalized_conditional_nll(m, subject, param, x, approx, args...; kwargs...)
+    end
+  end
+
+  cost = Optim.NLSolversBase.TwiceDifferentiable(Optim.NLSolversBase.only_fgh!(_fgh!), vrandeffsorth)
 
   vrandeffsorth .= Optim.minimizer(
     Optim.optimize(
@@ -241,8 +256,7 @@ function _orth_empirical_bayes!(
         show_trace=false,
         extended_trace=true,
         g_tol=1e-5
-      );
-      autodiff=:forward))
+      )))
   return vrandeffsorth
 end
 
@@ -535,61 +549,85 @@ function marginal_nll_gradient!(g::AbstractVector,
 
   param = TransformVariables.transform(trf, vparam)
 
-  ∂ℓᵐ∂θ = ForwardDiff.gradient(
-    _vparam -> marginal_nll(
-      model,
-      subject,
-      TransformVariables.transform(trf, _vparam),
-      vrandeffsorth,
-      approx,
-      args...; kwargs...
-    ),
-    vparam,
-  )
+  _cs = max(1, div(8, length(vrandeffsorth)))
 
-  ∂ℓᵐ∂η = ForwardDiff.gradient(
-    vηorth -> marginal_nll(
-      model,
-      subject,
-      param,
-      vηorth,
-      approx,
-      args...; kwargs...
-    ),
+  _f_∂ℓᵐ∂θ = _vparam -> marginal_nll(
+    model,
+    subject,
+    TransformVariables.transform(trf, _vparam),
     vrandeffsorth,
+    approx,
+    args...; kwargs...
   )
+  cs = min(length(vparam), _cs)
+  cfg_∂ℓᵐ∂θ = ForwardDiff.GradientConfig(_f_∂ℓᵐ∂θ, vparam, ForwardDiff.Chunk{cs}())
+  ∂ℓᵐ∂θ = ForwardDiff.gradient(_f_∂ℓᵐ∂θ, vparam, cfg_∂ℓᵐ∂θ)
 
-  ∂²ℓᵖ∂η² = ForwardDiff.hessian(
-    vηorth -> penalized_conditional_nll(
-      model,
-      subject,
-      param,
-      vηorth,
-      approx,
-      args...; kwargs...),
-    vrandeffsorth
+  _f_∂ℓᵐ∂η = vηorth -> marginal_nll(
+    model,
+    subject,
+    param,
+    vηorth,
+    approx,
+    args...; kwargs...
   )
+  cs = min(length(vrandeffsorth), _cs)
+  cfg_∂ℓᵐ∂η = ForwardDiff.GradientConfig(_f_∂ℓᵐ∂η, vrandeffsorth, ForwardDiff.Chunk{cs}())
+  ∂ℓᵐ∂η = ForwardDiff.gradient(_f_∂ℓᵐ∂η, vrandeffsorth, cfg_∂ℓᵐ∂η)
 
-  ∂²ℓᵖ∂η∂θ = ForwardDiff.jacobian(
-    _vparam -> begin
-      _param = TransformVariables.transform(trf, _vparam)
-      ForwardDiff.gradient(
-        vηorth -> penalized_conditional_nll(
-          model,
-          subject,
-          _param,
-          vηorth,
-          approx,
-          args...; kwargs...),
-        vrandeffsorth
-      )
-    end,
-    vparam
-  )
+  _f_∂²ℓᵖ∂η² = vηorth -> penalized_conditional_nll(
+    model,
+    subject,
+    param,
+    vηorth,
+    approx,
+    args...; kwargs...)
+  cs = min(length(vrandeffsorth), 3)
+  cfg_∂²ℓᵖ∂η² = ForwardDiff.HessianConfig(_f_∂²ℓᵖ∂η², vrandeffsorth, ForwardDiff.Chunk{cs}())
+  ∂²ℓᵖ∂η² = ForwardDiff.hessian(_f_∂²ℓᵖ∂η², vrandeffsorth, cfg_∂²ℓᵖ∂η²)
+
+  _f_∂²ℓᵖ∂η∂θ = _vparam -> begin
+    _param = TransformVariables.transform(trf, _vparam)
+    ForwardDiff.gradient(
+      vηorth -> penalized_conditional_nll(
+        model,
+        subject,
+        _param,
+        vηorth,
+        approx,
+        args...; kwargs...),
+      vrandeffsorth
+    )
+  end
+  cfg_∂²ℓᵖ∂η∂θ = ForwardDiff.JacobianConfig(_f_∂²ℓᵖ∂η∂θ, vparam, ForwardDiff.Chunk{1}())
+  ∂²ℓᵖ∂η∂θ = ForwardDiff.jacobian(_f_∂²ℓᵖ∂η∂θ, vparam, cfg_∂²ℓᵖ∂η∂θ)
 
   dηdθ = -∂²ℓᵖ∂η² \ ∂²ℓᵖ∂η∂θ
 
   g .= ∂ℓᵐ∂θ .+ dηdθ'*∂ℓᵐ∂η
+
+  # _f_dℓᵐdθ = _vparam -> begin
+  #   _param = TransformVariables.transform(trf, _vparam)
+
+  #   _orth_empirical_bayes!(
+  #     vrandeffsorth,
+  #     model,
+  #     subject,
+  #     _param,
+  #     approx,
+  #     args...; kwargs...)
+
+  #   marginal_nll(
+  #     model,
+  #     subject,
+  #     _param,
+  #     vrandeffsorth,
+  #     approx,
+  #     args...; kwargs...)
+  # end
+
+  # cfg = ForwardDiff.GradientConfig(_f_dℓᵐdθ, vparam, ForwardDiff.Chunk{1}())
+  # g = ForwardDiff.gradient(_f_dℓᵐdθ, vparam, cfg)
 
   return g
 end
@@ -835,6 +873,7 @@ function _∂²l∂η²(obsdv::AbstractVector, dv_d::AbstractVector{<:Distributi
   # Initialize Hessian matrix and gradient vector
   ## FIXME! Careful about hardcoding for Float64 here
   H    = @SMatrix zeros(nrfx, nrfx)
+  dldη = @SVector zeros(nrfx)
   nl   = 0.0
 
   for j in eachindex(dv_d)
@@ -842,13 +881,15 @@ function _∂²l∂η²(obsdv::AbstractVector, dv_d::AbstractVector{<:Distributi
     if ismissing(obj)
       continue
     end
-    dvj = dv_d[j]
-    f   = SVector(ForwardDiff.partials(_mean(dvj)).values)
-    H  += f/ForwardDiff.value(_var(dvj))*f'
-    nl -= ForwardDiff.value(_lpdf(dvj, obj))
+    dvj   = dv_d[j]
+    f     = SVector(ForwardDiff.partials(_mean(dvj)).values)
+    fdr   = f/ForwardDiff.value(_var(dvj))
+    H    += fdr*f'
+    dldη -= fdr*(obj - ForwardDiff.value(dvj.μ))
+    nl   -= ForwardDiff.value(_lpdf(dvj, obj))
   end
 
-  return nl, nothing, H
+  return nl, dldη, H
 end
 
 # Categorical
@@ -1068,6 +1109,7 @@ function Distributions.fit(m::PumasModel,
     vvrandeffsorth     = [zero(_vecmean(m.random(param))) for subject in population]
     vvrandeffsorth_tmp = [copy(vrandefforths) for vrandefforths in vvrandeffsorth]
     cb = state -> begin
+      println("HELLO!")
       for i in eachindex(vvrandeffsorth)
         copyto!(vvrandeffsorth[i], vvrandeffsorth_tmp[i])
       end
