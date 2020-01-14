@@ -102,7 +102,8 @@ struct SAEMLogDensity{M,D,B,C,R,A,K}
   function Distributions.fit(m::PumasModel, population::Population, param::NamedTuple, approx::SAEM, vrandeffs::AbstractVector, nsamples=50, args...; kwargs...)
     trf_ident = Pumas.toidentitytransform(m.param)
     trf = Pumas.totransform(m.param)
-    vparam = TransformVariables.inverse(trf, param)
+    vparam = TransformVariables.inverse(trf_ident, param)
+    println(vparam)
     eta_vec = []
     Qs = Float64[]
     for i in 1:approx.num_reopt_theta
@@ -112,14 +113,13 @@ struct SAEMLogDensity{M,D,B,C,R,A,K}
       for k in 1:length(eta)
         push!(eta_vec,[eta[k][j:j+dimrandeff-1] for j in 1:dimrandeff:length(eta[k])])
       end
-      t_param = Pumas.totransform(m.param)
       push!(Qs,-Inf)
-      cost = fixeffs -> M_step(m, population, TransformVariables.transform(trf, fixeffs), eta_vec, i, nsamples, 1/i, Qs)
-      opt = Optim.optimize(cost, vparam)
-      println(opt)
+      cost = fixeffs -> M_step(m, population, TransformVariables.transform(trf_ident, fixeffs), eta_vec, i, nsamples, 1/i, Qs)
+      opt = Optim.optimize(cost, vparam, BFGS())
+      # println(opt)
       vparam = Optim.minimizer(opt)
       vrandeffs = eta[end]
-      println(vrandeffs)
+      # println(vrandeffs)
     end
     TransformVariables.transform(trf, vparam)
   end
