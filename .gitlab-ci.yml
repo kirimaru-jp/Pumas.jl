@@ -2,6 +2,7 @@ image: "julia:1"
 
 variables:
   JULIA_DEPOT_PATH: "$CI_PROJECT_DIR/.julia/"
+  JULIA_NUM_THREADS: 3
 
 cache:
   paths:
