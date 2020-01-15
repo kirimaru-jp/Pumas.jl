@@ -46,25 +46,25 @@ function quantile_sub_sim(dfs,ci_probabilities,times,stratify_on::Nothing)
   df_aggregate = DataFrame()
   map(df -> append!(df_aggregate, df), dfs)
   df_sim_quantile =  by(df_aggregate, [:t], (:low_quantile => t -> quantile(t, ci_probabilities), :quantile => t -> quantile(t, ci_probabilities),:high_quantile => t -> quantile(t, ci_probabilities)))
-  return df_sim_quantile 
+  return df_sim_quantile
 end
 
 function quantile_sub_sim(dfs,ci_probabilities,times,stratify_on::Symbol)
   df_aggregate = DataFrame()
   map(df -> append!(df_aggregate, df), dfs)
   df_sim_quantile =  by(df_aggregate, [:t,:cvs], (:low_quantile => t -> quantile(t, ci_probabilities), :quantile => t -> quantile(t, ci_probabilities),:high_quantile => t -> quantile(t, ci_probabilities)))
-  return groupby(df_sim_quantile, :cvs) 
+  return groupby(df_sim_quantile, :cvs)
 end
 
 function vpc(
   m::PumasModel,
   population::Population,
   param::NamedTuple,
-  reps::Integer = 499;
+  reps::Integer = 499, args...;
   probabilities::NTuple{3,Float64} = (0.1, 0.5, 0.9),
   ci_level::Float64 = 0.95,
   dvname::Symbol = :dv,
-  stratify_on = nothing
+  stratify_on = nothing, kwargs...
   )
 
   time = collect(Iterators.flatten([subject.time for subject in population]))
@@ -73,7 +73,7 @@ function vpc(
   empirical, cvs__ = quantile_t_data(population, probabilities, dvname, time, stratify_on)
 
   # Simulate `reps` new populations
-  sims = [simobs(m, population, param) for i in 1:reps]
+  sims = [simobs(m, population, param, args...; kwargs...) for i in 1:reps]
   # Compute the probabilities for the CI based on the level
   ci_probabilities = ((1 - ci_level)/2, (1 + ci_level)/2)
 
