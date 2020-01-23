@@ -8,6 +8,7 @@ if group == "All" || group == "NLME_Basic"
     @time @safetestset "Types (constructors, api, etc...)"           begin include("types.jl")                     end
     @time @safetestset "Naive estimation"                            begin include("single_subject.jl")            end
     @time @safetestset "Show methods"                                begin include("show.jl")                      end
+    @time @safetestset "VPC"                                         begin include("vpc.jl")                      end
   end
 end
 
