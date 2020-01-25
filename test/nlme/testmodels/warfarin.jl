@@ -11,7 +11,7 @@ _modeldict["warfarin"]["analytical"] = @model begin
     θ₂ ∈ RealDomain(lower=0.0, init=8.0)
     θ₃ ∈ RealDomain(lower=0.0, init=1.0)
     Ω  ∈ PDiagDomain(3)
-    σ  ∈ RealDomain(lower=0.0001, init=0.01)
+    σ²  ∈ RealDomain(lower=0.0001, init=0.01)
   end
 
   @random begin
@@ -34,7 +34,7 @@ _modeldict["warfarin"]["analytical"] = @model begin
   end
 
   @derived begin
-    dv ~ @. Normal(log(conc), sqrt(σ))
+    dv ~ @. Normal(log(abs(conc) + 1e-100), sqrt(σ²))
   end
 end
 
@@ -43,5 +43,5 @@ _modeldict["warfarin"]["param"] = (
   θ₂ = 8.0,
   θ₃ = 1.0,
   Ω  = Diagonal([0.07, 0.02, 0.6]),
-  σ  = 0.01
+  σ²  = 0.01
   )
