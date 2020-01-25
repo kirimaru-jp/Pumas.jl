@@ -34,7 +34,7 @@ _modeldict["warfarin"]["analytical"] = @model begin
   end
 
   @derived begin
-    dv ~ @. Normal(log(abs(conc) + 1e-100), sqrt(σ²))
+    dv ~ @. Normal(log(abs(conc) + 1e-100), sqrt(σ²)) #temporary fix to avoid <=0 concentrations  
   end
 end
 
