@@ -243,6 +243,11 @@ _rand(d::AbstractArray) = map(_rand,d)
 _rand(d::NamedTuple) = map(_rand,d)
 _rand(d) = d
 
+_rand(rng::AbstractRNG,d::Distributions.Sampleable) = rand(rng,d)
+_rand(rng::AbstractRNG,d::AbstractArray) = map(_rand,rng,d)
+_rand(rng::AbstractRNG,d::NamedTuple) = map(_rand,rng,d)
+_rand(rng::AbstractRNG,d) = d
+
 """
     simobs(m::PumasModel, subject::Subject, param[, randeffs, [args...]];
                   obstimes::AbstractArray=observationtimes(subject),kwargs...)
@@ -258,15 +263,24 @@ function simobs(m::PumasModel, subject::Subject,
                 args...;
                 obstimes::AbstractArray=observationtimes(subject),
                 callback = nothing,
-                saveat=obstimes,kwargs...)
+                saveat=obstimes,
+                obsseed = hash(subject.id),
+                kwargs...)
   col = m.pre(_rand(param), randeffs, subject)
   prob = _problem(m, subject, col, args...; saveat=saveat, callback=callback, kwargs...)
   alg = m.prob isa ExplicitModel ? nothing : alg=AutoTsit5(Rosenbrock23())
   sol = prob !== nothing ? solve(prob, args...; alg=alg, kwargs...) : nothing
   derived = m.derived(col,sol,obstimes,subject,param,randeffs)
-  obs = m.observed(col,sol,obstimes,map(_rand,derived),subject)
+  if obsseed === nothing
+    obs = m.observed(col,sol,obstimes,map(_rand,derived),subject)
+  else
+    MersenneTwister(obsseed)
+    obs = m.observed(col,sol,obstimes,map(_rand,rng,derived),subject)
+  end
   SimulatedObservations(subject,obstimes,obs)
 end
+
+struct ObseedID end
 
 function simobs(m::PumasModel, pop::Population,
                 param = init_param(m),
@@ -276,6 +290,7 @@ function simobs(m::PumasModel, pop::Population,
                 ensemblealg = EnsembleThreads(),
                 callback = nothing,
                 isfor_derived = false,
+                obsseed = ObseedID(),
                 kwargs...)
 
   function simobs_prob_func(prob,i,repeat)
@@ -306,6 +321,22 @@ function simobs(m::PumasModel, pop::Population,
       obs = m.observed(col,sol,obstimes,map(_rand,derived),pop[i])
       return SimulatedObservations(pop[i],obstimes,obs),false
     end
+    derived = m.derived(col,sol,obstimes,pop[i],param,randeffs)
+
+    if obsseed === nothing
+      obs = m.observed(col,sol,obstimes,map(_rand,derived),pop[i])
+    elseif obsseed isa ObseedID
+      rng = MersenneTwister(hash(pop[i].id))
+      obs = m.observed(col,sol,obstimes,map(_rand,rng,derived),pop[i])
+    elseif obsseed isa Vector
+      rng = MersenneTwister(obseed[i])
+      obs = m.observed(col,sol,obstimes,map(_rand,rng,derived),pop[i])
+    else
+      throw(error("obsseed must be nothing or a Vector of seeds"))
+    end
+
+    obs = m.observed(col,sol,obstimes,map(_rand,derived),pop[i])
+    SimulatedObservations(pop[i],obstimes,obs),false
   end
 
   prob = EnsembleProblem(m.prob,prob_func = simobs_prob_func,

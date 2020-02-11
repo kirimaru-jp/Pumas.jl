@@ -28,7 +28,7 @@ function npde(m::PumasModel,
 
   _names = keys(subject.observations)
   _population = [copy(subject) for i in 1:nsim]
-  sims = simobs(m, _population, param, args...; kwargs...)
+  sims = simobs(m, _population, param, args...; obsseed = nothing, kwargs...)
   obs = [sims[i].observed for i in 1:length(sims)]
 
   return map(NamedTuple{_names}(_names)) do name
@@ -249,7 +249,7 @@ function epredict(
   args...; kwargs...)
 
   _population = [copy(subject) for i in 1:nsim]
-  sims = simobs(m, _population, param, args...; kwargs...)
+  sims = simobs(m, _population, param, args...; obsseed = nothing, kwargs...)
   obs = [sims[i].observed for i in 1:nsim]
   _dv_keys = keys(subject.observations)
   return map(name -> mean(getproperty.(obs, name)), NamedTuple{_dv_keys}(_dv_keys))
@@ -340,7 +340,7 @@ function eiwres(m::PumasModel,
                 kwargs...)
 
   _population = [copy(subject) for i in 1:nsim]
-  dist = _derived(m, subject, param, args...; kwargs...)
+  dist = _derived(m, subject, param, args...; obsseed = nothing, kwargs...)
   _keys_dv = keys(subject.observations)
   return map(NamedTuple{_keys_dv}(_keys_dv)) do name
     dv = dist[1][name]
