@@ -338,15 +338,16 @@ function eiwres(m::PumasModel,
                 nsim::Integer,
                 args...;
                 kwargs...)
-  dist = _derived(m, subject, param, sample_randeffs(m, param), args...; kwargs...)
+
+  _population = [copy(subject) for i in 1:nsim]
+  dist = _derived(m, subject, param, args...; kwargs...)
   _keys_dv = keys(subject.observations)
   return map(NamedTuple{_keys_dv}(_keys_dv)) do name
-    dv = dist[name]
+    dv = dist[1][name]
     obsdv = subject.observations[name]
     sims_sum = (obsdv .- mean.(dv))./std.(dv)
     for i in 2:nsim
-      dist = _derived(m, subject, param, sample_randeffs(m, param), args...; kwargs...)
-      sims_sum .+= (obsdv .- mean.(dv))./std.(dv)
+      sims_sum .+= (obsdv .- mean.(dist[i][name]))./std.(dist[i][name])
     end
     return sims_sum ./ nsim
   end

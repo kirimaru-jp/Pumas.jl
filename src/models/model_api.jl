@@ -208,6 +208,30 @@ to be repeated in the other API functions
   dist
 end
 
+@inline function _derived(m::PumasModel,
+                          pop::Population,
+                          param::NamedTuple,
+                          randeffs=sample_randeffs(m, param),
+                          args...;
+                          # This is the only entry point to the ODE solver for
+                          # the estimation code so estimation-specific defaults
+                          # are set here, but are overriden in other cases.
+                          # Super messy and should get cleaned.
+                          reltol=DEFAULT_ESTIMATION_RELTOL,
+                          abstol=DEFAULT_ESTIMATION_ABSTOL,
+                          alg = AutoVern7(Rodas5(autodiff=false)),
+                          # Estimation only uses subject.time for the
+                          # observation time series
+                          obstimes = subject.time,
+                          callback = nothing,
+                          kwargs...)
+
+    simobs(m,pop,param,randeffs,args...;
+           reltol=reltol,abstol=abstol,alg=alg,
+           obstimes=obstimes,callback=callback,
+           isfor_derived=true,kwargs...)
+end
+
 #=
 _rand(d)
 
@@ -251,6 +275,7 @@ function simobs(m::PumasModel, pop::Population,
                 alg=AutoTsit5(Rosenbrock23()),
                 ensemblealg = EnsembleThreads(),
                 callback = nothing,
+                isfor_derived = false,
                 kwargs...)
 
   function simobs_prob_func(prob,i,repeat)
@@ -266,9 +291,21 @@ function simobs(m::PumasModel, pop::Population,
     col = sol.prob.p
     obstimes = :obstimes ∈ keys(kwargs) ? kwargs[:obstimes] : observationtimes(pop[i])
     saveat = :saveat ∈ keys(kwargs) ? kwargs[:saveat] : obstimes
-    derived = m.derived(col,sol,obstimes,pop[i],param,randeffs)
-    obs = m.observed(col,sol,obstimes,map(_rand,derived),pop[i])
-    SimulatedObservations(pop[i],obstimes,obs),false
+
+    if isfor_derived
+      if (sol.retcode != :Success && sol.retcode != :Terminated) ||
+        # FIXME! Make this uniform across the two solution types
+        # FIXME! obstimes can be empty
+        any(x->any(isnan,x), sol isa PKPDAnalyticalSolution ? sol(obstimes[end]) : sol.u[end])
+        # FIXME! Do we need to make this type stable?
+              return map(x->nothing, subject.observations),false # create a named tuple of nothing with the observed names ( should this be all of derived?)
+      end
+      dist = m.derived(col, sol, obstimes, pop[i], param, randeffs)
+    else
+      derived = m.derived(col,sol,obstimes,pop[i],param,randeffs)
+      obs = m.observed(col,sol,obstimes,map(_rand,derived),pop[i])
+      return SimulatedObservations(pop[i],obstimes,obs),false
+    end
   end
 
   prob = EnsembleProblem(m.prob,prob_func = simobs_prob_func,
