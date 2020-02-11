@@ -23,14 +23,17 @@ To calculate the Normalised Prediction Distribution Errors (NPDE).
 function npde(m::PumasModel,
               subject::Subject,
               param::NamedTuple,
-              nsim::Integer)
+              nsim::Integer,
+              args...;kwargs...)
 
   _names = keys(subject.observations)
-  sims = [simobs(m, subject, param).observed for i in 1:nsim]
+  _population = [copy(subject) for i in 1:nsim]
+  sims = simobs(m, _population, param, args...; kwargs...)
+  obs = [sims[i].observed for i in 1:length(sims)]
 
   return map(NamedTuple{_names}(_names)) do name
            y = subject.observations[name]
-           ysims = getproperty.(sims, name)
+           ysims = getproperty.(obs, name)
            mean_y = mean(ysims)
            cov_y = Symmetric(cov(ysims))
            Fcov_y = cholesky(cov_y)
@@ -245,9 +248,11 @@ function epredict(
   nsim::Integer,
   args...; kwargs...)
 
-  sims = [simobs(m, subject, param, args...; kwargs...).observed for i in 1:nsim]
+  _population = [copy(subject) for i in 1:nsim]
+  sims = simobs(m, _population, param, args...; kwargs...)
+  obs = [sims[i].observed for i in 1:nsim]
   _dv_keys = keys(subject.observations)
-  return map(name -> mean(getproperty.(sims, name)), NamedTuple{_dv_keys}(_dv_keys))
+  return map(name -> mean(getproperty.(obs, name)), NamedTuple{_dv_keys}(_dv_keys))
 end
 
 # IWRES like
