@@ -340,7 +340,8 @@ function eiwres(m::PumasModel,
                 kwargs...)
 
   _population = [copy(subject) for i in 1:nsim]
-  dist = _derived(m, subject, param, args...; kwargs...)
+  dist = _derived(m, _population, param, args...; kwargs...)
+
   _keys_dv = keys(subject.observations)
   return map(NamedTuple{_keys_dv}(_keys_dv)) do name
     dv = dist[1][name]
