@@ -211,6 +211,14 @@ struct Subject{T1,T2,T3,T4,T5,T6}
   time::T4
   tvcov::T5
   covartime::T6
+
+  function Subject(id::String,observations,covariates,events,
+                   time,tvcov,covartime)
+    new{typeof(observations),typeof(covariates),typeof(events),
+        typeof(time),typeof(tvcov),typeof(covartime)}(id,observations,
+        covariates,events,time,tvcov,covartime)
+  end
+
   function Subject(data::AbstractDataFrame, Names,
                    id, time, evid, amt, addl, ii, cmt, rate, ss,
                    cvs::Vector{<:Symbol} = Symbol[],
@@ -302,7 +310,11 @@ Base.hash(subject::Subject, h::UInt) = hash(
           subject.id, h)))))
 
 Base.:(==)(subject1::Subject, subject2::Subject) = hash(subject1) == hash(subject2)
-
+Base.copy(subject::Subject) = Subject(subject.id, deepcopy(subject.observations),
+                                      deepcopy(subject.covariates),
+                                      copy(subject.events),copy(subject.time),
+                                      deepcopy(subject.tvcov),
+                                      copy(subject.covartime))
 function DataFrames.DataFrame(subject::Subject; include_covariates=true, include_dvs=true)
   # Build a DataFrame that holds the events
   df_events = DataFrame(build_event_list(subject.events, true))
