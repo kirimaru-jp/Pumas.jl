@@ -68,7 +68,7 @@ m_analytic = @model begin
         V  = θ[3] * exp(η[2])
     end
 
-    @dynamics Depots1Central1 
+    @dynamics Depots1Central1
 
     @derived begin
         conc = @. Central / V
@@ -126,3 +126,7 @@ sol_diffeq = simobs(m_diffeq,data,param,ensemblealg = EnsembleSerial())
 sol_diffeq = simobs(m_diffeq,data,param,ensemblealg = EnsembleThreads())
 sol_diffeq = simobs(m_diffeq,data,param,ensemblealg = EnsembleSplitThreads())
 sol_diffeq = simobs(m_diffeq,data,param,ensemblealg = EnsembleDistributed())
+
+# Turn back into subjects
+simsubjects = Subject.(sol_diffeq)
+@test keys(simsubjects[1].observations) == (:cp,:conc,:dv)
