@@ -1,4 +1,4 @@
-struct PKPDAnalyticalSolution{T,N,uType,tType,dType,rType,pType,P} <: DiffEqBase.AbstractAnalyticalSolution{T,N}
+struct PKPDAnalyticalSolution{T,N,uType,tType,dType,rType,pType,P} <: DiffEqBase.AbstractAnalyticalSolution{T,N,uType}
   u::uType
   t::tType
   doses::dType
@@ -62,7 +62,7 @@ function Base.show(io::IO, m::MIME"text/plain", A::PKPDAnalyticalSolution)
   show(io,m,A.u)
 end
 
-struct AnalyticalPKSolution{T,N,uType,tType,S1,S2} <: DiffEqBase.AbstractTimeseriesSolution{T,N}
+struct AnalyticalPKSolution{T,N,uType,tType,S1,S2} <: DiffEqBase.AbstractTimeseriesSolution{T,N,Vector{uType}}
   u::Vector{uType}
   t::Vector{tType}
   pksol::S1
@@ -126,7 +126,7 @@ function (sol::AnalyticalPKSolution)(ts::AbstractArray,deriv::Type{<:Val}=Val{0}
   end
 end
 
-struct NullDESolution{P} <: DiffEqBase.AbstractAnalyticalSolution{Any,1}
+struct NullDESolution{P} <: DiffEqBase.AbstractAnalyticalSolution{Any,1,Nothing}
   prob::P
 end
 

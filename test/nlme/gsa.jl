@@ -1,6 +1,6 @@
 using Test
 using Pumas
-using LinearAlgebra, DiffEqSensitivity
+using LinearAlgebra, DiffEqSensitivity, Random
 
 @testset "GSA Tests" begin
 choose_covariates() = (isPM = rand([1, 0]),
@@ -43,7 +43,6 @@ m_diffeq = @model begin
   end
 end
 
-
 p = (  θ1 = 1.5,  #Ka
        θ2  =  1.1,  #CL
        θ3  =   20.0  #V
@@ -53,63 +52,131 @@ p = (  θ1 = 1.5,  #Ka
 sobol = gsa(m_diffeq,
             ev2,
             p,
-            DiffEqSensitivity.Sobol(N=10000),
-            [:auc], (θ1 = 0.1, θ2 = 0.5, θ3 = 10))
+            DiffEqSensitivity.Sobol(order=[0,1,2]),
+            [:auc], (θ1 = 0.1, θ2 = 0.5, θ3 = 10); N=1000)
 
-@test sobol.first_order[1][1] ≈ 0.0 atol = 1e-2
-@test sobol.first_order[1][2] ≈ 1.035837606317531 atol = 4e-1
-@test sobol.first_order[1][3] ≈ -5.6704008995506364e-5 atol = 1e-2
-@test sobol.total_order[1][1] ≈ 0.0 atol = 1e-2
-@test sobol.total_order[1][2] ≈ 0.9591774724587756 atol = 4e-1
-@test sobol.total_order[1][3] ≈ 4.113887839053021e-7 atol = 1e-2
-sobol_subj = sobol = gsa(m_diffeq,
-            ev2[1],
-            p,
-            DiffEqSensitivity.Sobol(nboot = 2),
-            [:auc], (θ1 = 0.1, θ2 = 0.5, θ3 = 10))
-@test sprint((io, t) -> show(io, MIME"text/plain"(), t), sobol_subj) == 
-"""
+@test sprint((io, t) -> show(io, MIME"text/plain"(), t), sobol) == 
+"""Sobol Sensitivity Analysis
+
 First Order Indices
-
-Derived Variable: auc
-
-Parameter first order indices min c.i. max c.i.
-
-θ1          $(sobol_subj.first_order[1][1])          $(sobol_subj.first_order_conf_int[1][1][1])          $(sobol_subj.first_order_conf_int[2][1][1])
-
-θ2          $(sobol_subj.first_order[1][2])          $(sobol_subj.first_order_conf_int[1][1][2])          $(sobol_subj.first_order_conf_int[2][1][2])
-
-θ3          $(sobol_subj.first_order[1][3])          $(sobol_subj.first_order_conf_int[1][1][3])          $(sobol_subj.first_order_conf_int[2][1][3])
+1×4 DataFrame
+│ Row │ dv_name │ θ1      │ θ2      │ θ3          │
+│     │ Any     │ Float64 │ Float64 │ Float64     │
+├─────┼─────────┼─────────┼─────────┼─────────────┤
+│ 1   │ auc     │ 0.0     │ 1.01175 │ -8.67356e-6 │
 
 Total Order Indices
+1×4 DataFrame
+│ Row │ dv_name │ θ1      │ θ2       │ θ3         │
+│     │ Any     │ Float64 │ Float64  │ Float64    │
+├─────┼─────────┼─────────┼──────────┼────────────┤
+│ 1   │ auc     │ 0.0     │ 0.994045 │ 5.43116e-6 │
 
-Derived Variable: auc
-
-Parameter total order indices min c.i. max c.i.
-
-θ1          $(sobol_subj.total_order[1][1])          $(sobol_subj.total_order_conf_int[1][1][1])          $(sobol_subj.total_order_conf_int[2][1][1])
-
-θ2          $(sobol_subj.total_order[1][2])          $(sobol_subj.total_order_conf_int[1][1][2])          $(sobol_subj.total_order_conf_int[2][1][2])
-
-θ3          $(sobol_subj.total_order[1][3])          $(sobol_subj.total_order_conf_int[1][1][3])          $(sobol_subj.total_order_conf_int[2][1][3])
+Second Order Indices
+1×4 DataFrame
+│ Row │ dv_name │ θ1*θ2   │ θ1*θ3      │ θ2*θ3   │
+│     │ Any     │ Float64 │ Float64    │ Float64 │
+├─────┼─────────┼─────────┼────────────┼─────────┤
+│ 1   │ auc     │ 1.0029  │ 4.28388e-7 │ 1.0029  │
 
 """
 
+sobol_sub = gsa(m_diffeq,
+            ev2[1],
+            p,
+            DiffEqSensitivity.Sobol(order=[0,1,2]),
+            [:auc], (θ1 = 0.1, θ2 = 0.5, θ3 = 10); N=1000)
+
+@test sprint((io, t) -> show(io, MIME"text/plain"(), t), sobol_sub) ==
+"""Sobol Sensitivity Analysis
+
+First Order Indices
+1×4 DataFrame
+│ Row │ dv_name │ θ1      │ θ2      │ θ3          │
+│     │ Any     │ Float64 │ Float64 │ Float64     │
+├─────┼─────────┼─────────┼─────────┼─────────────┤
+│ 1   │ auc     │ 0.0     │ 1.01175 │ -8.67356e-6 │
+
+Total Order Indices
+1×4 DataFrame
+│ Row │ dv_name │ θ1      │ θ2       │ θ3         │
+│     │ Any     │ Float64 │ Float64  │ Float64    │
+├─────┼─────────┼─────────┼──────────┼────────────┤
+│ 1   │ auc     │ 0.0     │ 0.994045 │ 5.43116e-6 │
+
+Second Order Indices
+1×4 DataFrame
+│ Row │ dv_name │ θ1*θ2   │ θ1*θ3      │ θ2*θ3   │
+│     │ Any     │ Float64 │ Float64    │ Float64 │
+├─────┼─────────┼─────────┼────────────┼─────────┤
+│ 1   │ auc     │ 1.0029  │ 4.28388e-7 │ 1.0029  │
+
+"""
+
+Random.seed!(123)
 morris = gsa(m_diffeq,
                    ev2,
                    p,
-                   DiffEqSensitivity.Morris(len_trajectory = 500,num_trajectory=1000),
+                   DiffEqSensitivity.Morris(relative_scale = true, num_trajectory=5000),
                    [:auc],(θ1 = 0.1, θ2 = 0.5, θ3 = 10))
+
+@test morris.means[!, :θ1][1] ≈ 0.0 rtol = 1e-12
+@test morris.means[!, :θ2][1] ≈ -0.877494 atol = 5e-2
+@test morris.means[!, :θ3][1] ≈ -5.18611e-5 atol = 5e-2
+@test [morris.means_star[!, :θ1][1], morris.means_star[!, :θ2][1], morris.means_star[!, :θ3][1]] ≈ abs.([morris.means[!, :θ1][1], morris.means[!, :θ2][1], morris.means[!, :θ3][1]]) rtol = 1e-12
+@test morris.variances[!, :θ1][1] ≈ 0.0 rtol = 1e-12
+@test morris.variances[!, :θ2][1] ≈ 0.14922 atol = 5e-2
+@test morris.variances[!, :θ3][1] ≈ 8.56573e-9 atol = 5e-2
+
 @test sprint((io, t) -> show(io, MIME"text/plain"(), t), morris) ==
-"""Derived Variable: auc
+"""Morris Sensitivity Analysis
 
-Parameter      μ      variance
+Means (μ)
+1×4 DataFrame
+│ Row │ dv_name │ θ1      │ θ2        │ θ3          │
+│     │ Any     │ Float64 │ Float64   │ Float64     │
+├─────┼─────────┼─────────┼───────────┼─────────────┤
+│ 1   │ auc     │ 0.0     │ -0.883422 │ -5.07704e-5 │
 
-θ1          $(morris.μ[1][1]) $(morris.variances[1][1])
+Means star (μ*)
+1×4 DataFrame
+│ Row │ dv_name │ θ1      │ θ2       │ θ3         │
+│     │ Any     │ Float64 │ Float64  │ Float64    │
+├─────┼─────────┼─────────┼──────────┼────────────┤
+│ 1   │ auc     │ 0.0     │ 0.883422 │ 5.07704e-5 │
 
-θ2          $(morris.μ[1][2]) $(morris.variances[1][2])
+Variances
+1×4 DataFrame
+│ Row │ dv_name │ θ1      │ θ2       │ θ3         │
+│     │ Any     │ Float64 │ Float64  │ Float64    │
+├─────┼─────────┼─────────┼──────────┼────────────┤
+│ 1   │ auc     │ 0.0     │ 0.148674 │ 8.09321e-9 │
 
-θ3          $(morris.μ[1][3]) $(morris.variances[1][3])
+"""
+
+Random.seed!(123)
+efast = gsa(m_diffeq,
+            ev2,
+            p,
+            DiffEqSensitivity.eFAST(),
+            [:auc], (θ1 = 0.1, θ2 = 0.5, θ3 = 10))
+
+@test sprint((io, t) -> show(io, MIME"text/plain"(), t), efast) ==
+"""eFAST Sensitivity Analysis
+
+First Order Indices
+1×4 DataFrame
+│ Row │ dv_name │ θ1         │ θ2       │ θ3         │
+│     │ Any     │ Float64    │ Float64  │ Float64    │
+├─────┼─────────┼────────────┼──────────┼────────────┤
+│ 1   │ auc     │ 2.26511e-8 │ 0.982978 │ 3.48522e-7 │
+
+Total Order Indices
+1×4 DataFrame
+│ Row │ dv_name │ θ1        │ θ2       │ θ3        │
+│     │ Any     │ Float64   │ Float64  │ Float64   │
+├─────┼─────────┼───────────┼──────────┼───────────┤
+│ 1   │ auc     │ 7.8894e-6 │ 0.998808 │ 0.0170702 │
 
 """
 end

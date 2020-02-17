@@ -1,13 +1,15 @@
 function _build_diffeq_problem(m::PumasModel, subject::Subject, args...;
                                saveat=Float64[],
                                save_discont= isnothing(saveat) || isempty(saveat),
-                               continuity=:right, kwargs...)
+                               continuity=:right,
+                               callback = nothing, kwargs...)
   prob = typeof(m.prob) <: DiffEqBase.AbstractJumpProblem ? m.prob.prob : m.prob
   tspan = prob.tspan
   col = prob.p
+  col0 = col(prob.tspan[1]) # would be great to get the numtype without this
   u0 = prob.u0
 
-  T = promote_type(numtype(col), numtype(u0), numtype(tspan))
+  T = promote_type(numtype(col0), numtype(u0), numtype(tspan))
   # we don't want to promote units
   if T <: Unitful.Quantity
     Tu0 = map(float, u0)
@@ -18,19 +20,34 @@ function _build_diffeq_problem(m::PumasModel, subject::Subject, args...;
 
   # build a "modified" problem using DiffEqWrapper
   fd = DiffEqWrapper(prob.f.f, 0, zero(u0)./oneunit(eltype(tspan)))
-  ft = DiffEqBase.parameterless_type(typeof(prob.f))
+  if typeof(prob) <: DiffEqBase.AbstractODEProblem
+    _jac   = DiffEqBase.has_jac(prob.f) ? ParamUnwrap{DiffEqBase.isinplace(prob)}(prob.f.jac) : nothing
+    _Wfact = DiffEqBase.has_Wfact(prob.f) ? ParamUnwrap{DiffEqBase.isinplace(prob)}(prob.f.Wfact) : nothing
+    _Wfact_t = DiffEqBase.has_Wfact_t(prob.f) ? ParamUnwrap{DiffEqBase.isinplace(prob)}(prob.f.Wfact_t) : nothing
+    new_f = ODEFunction{DiffEqBase.isinplace(prob)}(fd,
+                          jac=_jac,
+                          Wfact=_Wfact,
+                          Wfact_t = _Wfact_t)
+  else
+    new_f = make_function(prob,fd)
+  end
 
   # figure out callbacks and convert type for tspan if necessary
-  tstops,cb = ith_subject_cb(col,subject,Tu0,tspan[1],typeof(prob),saveat,save_discont,continuity)
-  Tt = promote_type(numtype(tstops), numtype(tspan))
-  tspan = Tt.(tspan)
-  :callback ∈ keys(prob.kwargs) && (cb = CallbackSet(cb, prob.kwargs[:callback]))
+  # d_discontinuities are used to inform diffeq about the places where things change
+  # suddenly in the model and introduce discontinuities in the derivates (such as
+  # time varying covariates etc)
+
+  tstops,_cb,d_discontinuities = ith_subject_cb(col,subject,Tu0,tspan[1],typeof(prob),saveat,save_discont,continuity)
+  # tstops,cb,d_discontinuities = ith_subject_cb(col,subject,Tu0,tspan[1],typeof(prob),saveat,save_discont,continuity)
+
+  cb = CallbackSet(_cb, callback)
+
+  Tt = promote_type(t_numtype(u0,cb), numtype(tstops), numtype(tspan))
+  _tspan = Tt.(tspan)
 
   # Remake problem of correct type
-  new_f = make_function(prob,fd)
-
-  remake(m.prob; f=new_f, u0=Tu0, tspan=tspan, callback=cb, saveat=saveat,
-                 tstops = tstops,
+  remake(m.prob; f=new_f, u0=Tu0, tspan=_tspan, callback=cb, saveat=saveat,
+                 tstops = tstops, d_discontinuities=d_discontinuities,
                  save_first = !isnothing(saveat) && tspan[1] ∈ saveat)
 end
 
@@ -53,16 +70,14 @@ function build_pkpd_problem(_prob::DiffEqBase.AbstractJumpProblem,set_parameters
                                             _prob.jump_callback,_prob.variable_jumps),tstops
 end
 
-function ith_subject_cb(p,datai::Subject,u0,t0,ProbType,saveat,save_discont,continuity)
-  isempty(datai.events) && return Float64[], nothing
+function ith_subject_cb(pre,datai::Subject,u0,t0,ProbType,saveat,save_discont,continuity)
+  isempty(datai.events) && return Float64[], nothing, Float64[]
   ss_abstol = 1e-12 # TODO: Make an option
   ss_reltol = 1e-12 # TODO: Make an option
   ss_max_iters = 1000
-
-  lags,bioav,rate,duration = get_magic_args(p,u0,t0)
-  events = adjust_event(datai.events,u0,lags,bioav,rate,duration)
-
+  events = adjust_event(datai.events,pre,u0)
   tstops = sorted_approx_unique(events)
+  d_discontinuities = datai.covartime
   counter::Int = 1
   ss_mode = Ref(false)
   ss_time = Ref(-one(eltype(tstops)))
@@ -101,7 +116,7 @@ function ith_subject_cb(p,datai::Subject,u0,t0,ProbType,saveat,save_discont,cont
     while counter <= length(events) && events[counter].time <= integrator.t
       cur_ev = events[counter]
       @inbounds if (cur_ev.evid == 1 || cur_ev.evid == -1) && cur_ev.ss == 0
-        dose!(integrator,integrator.u,cur_ev,bioav,last_restart)
+        dose!(integrator,integrator.u,cur_ev,last_restart)
         counter += 1
       elseif cur_ev.evid >= 3
         if typeof(integrator.u) <: Union{Number,FieldVector,SArray,SLArray}
@@ -119,7 +134,7 @@ function ith_subject_cb(p,datai::Subject,u0,t0,ProbType,saveat,save_discont,cont
           f.f.rates .= 0
         end
 
-        cur_ev.evid == 4 && dose!(integrator,integrator.u,cur_ev,bioav,last_restart)
+        cur_ev.evid == 4 && dose!(integrator,integrator.u,cur_ev,last_restart)
         counter += 1
       elseif cur_ev.ss > 0
         if !ss_mode[]
@@ -142,11 +157,7 @@ function ith_subject_cb(p,datai::Subject,u0,t0,ProbType,saveat,save_discont,cont
           ProbType <: DiffEqBase.SDEProblem && (integrator.W.save_everystep=false)
 
           ss_time[] = integrator.t
-          if typeof(bioav) <: Number
-            _duration = (bioav*cur_ev.amt)/cur_ev.rate
-          else
-            _duration = (bioav[cur_ev.cmt]*cur_ev.amt)/cur_ev.rate
-          end
+          _duration = cur_ev.amt/cur_ev.rate
           ss_duration[] = _duration
           ss_overlap_duration[] = mod(_duration,cur_ev.ii)
           ss_ii[] = cur_ev.ii
@@ -156,7 +167,7 @@ function ith_subject_cb(p,datai::Subject,u0,t0,ProbType,saveat,save_discont,cont
           ss_idx[] = length(integrator.sol)
           ss_cache .= integrator.u
           ss_reset_cache .= integrator.u
-          ss_dose!(integrator,integrator.u,cur_ev,bioav,ss_rate_multiplier,ss_rate_end)
+          ss_dose!(integrator,integrator.u,cur_ev,ss_rate_multiplier,ss_rate_end)
           add_tstop!(integrator,ss_end[])
           cur_ev.rate > 0 && add_tstop!(integrator,ss_rate_end[])
         elseif integrator.t == ss_end[]
@@ -188,7 +199,7 @@ function ith_subject_cb(p,datai::Subject,u0,t0,ProbType,saveat,save_discont,cont
               end
             end
 
-            ss_dose!(integrator,integrator.u,cur_ev,bioav,ss_rate_multiplier,ss_rate_end)
+            ss_dose!(integrator,integrator.u,cur_ev,ss_rate_multiplier,ss_rate_end)
 
             if integrator.t == integrator.sol.prob.tspan[2]
               # If there was a steady state that went over, it will have added
@@ -244,7 +255,7 @@ function ith_subject_cb(p,datai::Subject,u0,t0,ProbType,saveat,save_discont,cont
           else #Failure to converge, go again
             ss_cache .= integrator.u
             ss_counter[] += 1
-            ss_dose!(integrator,integrator.u,cur_ev,bioav,ss_rate_multiplier,ss_rate_end)
+            ss_dose!(integrator,integrator.u,cur_ev,ss_rate_multiplier,ss_rate_end)
             ss_rate_end[] < ss_end[] && add_tstop!(integrator,ss_rate_end[])
             #add_tstop!(integrator,ss_end[])
           end
@@ -299,10 +310,10 @@ function ith_subject_cb(p,datai::Subject,u0,t0,ProbType,saveat,save_discont,cont
     end
   end
   save_positions = save_discont ? (true, true) : (false, false)
-  tstops,DiscreteCallback(condition,affect!,subject_cb_initialize!,save_positions)
+  tstops,DiscreteCallback(condition,affect!,subject_cb_initialize!,save_positions),d_discontinuities
 end
 
-function dose!(integrator,u,cur_ev,bioav,last_restart)
+function dose!(integrator,u,cur_ev,last_restart)
 
   if typeof(integrator.sol.prob) <: DDEProblem
     f = integrator.f
@@ -311,11 +322,7 @@ function dose!(integrator,u,cur_ev,bioav,last_restart)
   end
 
   if cur_ev.rate == 0
-    if typeof(bioav) <: Number
-      @views integrator.u[cur_ev.cmt] += bioav*cur_ev.amt
-    else
-      @views integrator.u[cur_ev.cmt] += bioav[cur_ev.cmt]*cur_ev.amt
-    end
+    @views integrator.u[cur_ev.cmt] += cur_ev.amt
   else
     if cur_ev.rate_dir > 0 || integrator.t - cur_ev.duration > last_restart[]
       f.f.rates_on += cur_ev.evid > 0
@@ -324,14 +331,10 @@ function dose!(integrator,u,cur_ev,bioav,last_restart)
   end
 end
 
-function dose!(integrator,u::Union{SArray,SLArray,FieldVector},cur_ev,bioav,last_restart)
+function dose!(integrator,u::Union{SArray,SLArray,FieldVector},cur_ev,last_restart)
   f = integrator.f
   if cur_ev.rate == 0
-    if typeof(bioav) <: Number
-      integrator.u = StaticArrays.setindex(integrator.u,integrator.u[cur_ev.cmt] + bioav*cur_ev.amt,cur_ev.cmt)
-    else
-      integrator.u = StaticArrays.setindex(integrator.u,integrator.u[cur_ev.cmt] + bioav[cur_ev.cmt]*cur_ev.amt,cur_ev.cmt)
-    end
+    integrator.u = StaticArrays.setindex(integrator.u,integrator.u[cur_ev.cmt] + cur_ev.amt,cur_ev.cmt)
   else
     if cur_ev.rate_dir > 0 || integrator.t - cur_ev.duration > last_restart[]
       f.f.rates_on += cur_ev.evid > 0
@@ -340,31 +343,23 @@ function dose!(integrator,u::Union{SArray,SLArray,FieldVector},cur_ev,bioav,last
   end
 end
 
-function ss_dose!(integrator,u,cur_ev,bioav,ss_rate_multiplier,ss_rate_end)
+function ss_dose!(integrator,u,cur_ev,ss_rate_multiplier,ss_rate_end)
   f = integrator.f
   if cur_ev.rate > 0
     f.f.rates_on = true
     f.f.rates[cur_ev.cmt] = ss_rate_multiplier[]*cur_ev.rate*cur_ev.rate_dir
   else
-    if typeof(bioav) <: Number
-      integrator.u[cur_ev.cmt] += bioav*cur_ev.amt
-    else
-      integrator.u[cur_ev.cmt] += bioav[cur_ev.cmt]*cur_ev.amt
-    end
+    integrator.u[cur_ev.cmt] += cur_ev.amt
   end
 end
 
-function ss_dose!(integrator,u::Union{SArray,SLArray,FieldVector},cur_ev,bioav,ss_rate_multiplier,ss_rate_end)
+function ss_dose!(integrator,u::Union{SArray,SLArray,FieldVector},cur_ev,ss_rate_multiplier,ss_rate_end)
   f = integrator.f
   if cur_ev.rate > 0
     f.f.rates_on = true
     f.f.rates = StaticArrays.setindex(f.f.rates,ss_rate_multiplier[]*cur_ev.rate*cur_ev.rate_dir,cur_ev.cmt)
   else
-    if typeof(bioav) <: Number
-      integrator.u = StaticArrays.setindex(integrator.u,integrator.u[cur_ev.cmt]+bioav*cur_ev.amt,cur_ev.cmt)
-    else
-      integrator.u = StaticArrays.setindex(integrator.u,integrator.u[cur_ev.cmt]+bioav[cur_ev.cmt]*cur_ev.amt,cur_ev.cmt)
-    end
+    integrator.u = StaticArrays.setindex(integrator.u,integrator.u[cur_ev.cmt]+cur_ev.amt,cur_ev.cmt)
   end
 end
 
@@ -406,6 +401,20 @@ end
 DiffEqWrapper(f::DiffEqWrapper) = DiffEqWrapper(f.f,0,f.rates)
 
 function (f::DiffEqWrapper)(u,p,t)
+  # Because it is impossible (or unclear) how you can easily have MTK call
+  # `p` and then unpack it, we intercept the solve flow here and evaluate
+  # the `pre` block at `t` and pass it on as a `NamedTuple`
+  out = f.f(u,p(t),t)
+  if f.rates_on > 0
+    return out + f.rates
+  else
+    return out
+  end
+end
+function (f::DiffEqWrapper)(u,p::NamedTuple,t)
+  # Because it is impossible (or unclear) how you can easily have MTK call
+  # `p` and then unpack it, we intercept the solve flow here and evaluate
+  # the `pre` block at `t` and pass it on as a `NamedTuple`
   out = f.f(u,p,t)
   if f.rates_on > 0
     return out + f.rates
@@ -413,12 +422,13 @@ function (f::DiffEqWrapper)(u,p,t)
     return out
   end
 end
+
 function (f::DiffEqWrapper)(du,u,p,t)
-  f.f(du,u,p,t)
+  f.f(du,u,p(t),t)
   f.rates_on > 0 && (du .+= f.rates)
 end
 function (f::DiffEqWrapper)(u,h::DiffEqBase.AbstractHistoryFunction,p,t)
-  f.f(du,u,h,p,t)
+  f.f(du,u,h,p(t),t)
   if f.rates_on > 0
     return out + rates
   else
@@ -426,6 +436,15 @@ function (f::DiffEqWrapper)(u,h::DiffEqBase.AbstractHistoryFunction,p,t)
   end
 end
 function (f::DiffEqWrapper)(du,u,h::DiffEqBase.AbstractHistoryFunction,p,t)
-  f.f(du,u,h,p,t)
+  f.f(du,u,h,p(t),t)
   f.rates_on > 0 && (du .+= f.rates)
 end
+
+struct ParamUnwrap{iip,F}
+  f::F
+  ParamUnwrap{iip}(f) where {iip} = new{iip,typeof(f)}(f)
+end
+(f::ParamUnwrap{false})(u,p,t) = f.f(u,p(t),t)
+(f::ParamUnwrap{false})(u,p,gamma,t) = f.f(u,p(t),gamma,t)
+(f::ParamUnwrap{true})(du,u,p,t) = f.f(du,u,p(t),t)
+(f::ParamUnwrap{true})(du,u,p,gamma,t) = f.f(du,u,p(t),gamma,t)

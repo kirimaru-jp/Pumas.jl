@@ -93,9 +93,10 @@ end
                                  param::NamedTuple,
                                  randeffs::NamedTuple,
                                  dist::NamedTuple)
-
-  collated_numtype = numtype(m.pre(param, randeffs, subject))
-
+  pre = m.pre(param, randeffs, subject)
+  # Could we define a `pre` struct that can more easily have its
+  # numtype calculated? Say by having a field for prevars, thetas, etas
+  collated_numtype = numtype(pre(0.0))
   if any(d->d isa Nothing, dist)
     return collated_numtype(Inf)
   end
@@ -216,21 +217,34 @@ function _orth_empirical_bayes!(
   param::NamedTuple,
   approx::Union{FOCE,FOCEI,LaplaceI},
   args...;
-  # We explicitly use reltol to compute the right step size for finite difference based gradient
-  reltol=DEFAULT_ESTIMATION_RELTOL,
-  fdtype=Val{:central}(),
-  fdrelstep=_fdrelstep(m, param, reltol, fdtype),
   kwargs...)
 
-  cost = vηorth -> penalized_conditional_nll(
-    m,
-    subject,
-    param,
-    vηorth,
-    approx,
-    args...;
-    reltol=reltol,
-    kwargs...)
+  function _fgh!(F, G, H, x)
+    if G !== nothing || H !== nothing
+      nl, ∇nl, ∇²nl = ∂²l∂η²(m, subject, param, x, approx, args...; kwargs...)
+
+      if G !== nothing && ∇nl !== nothing
+        G .= ∇nl
+      end
+      if H !== nothing && ∇²nl !== nothing
+        H .= ∇²nl
+      end
+
+      if G !== nothing
+        G .+= x
+      end
+      if H !== nothing
+        H .= H + I
+      end
+      return nl + x'x/2
+    end
+
+    if F !== nothing
+      return penalized_conditional_nll(m, subject, param, x, approx, args...; kwargs...)
+    end
+  end
+
+  cost = Optim.NLSolversBase.TwiceDifferentiable(Optim.NLSolversBase.only_fgh!(_fgh!), vrandeffsorth)
 
   vrandeffsorth .= Optim.minimizer(
     Optim.optimize(
@@ -241,8 +255,7 @@ function _orth_empirical_bayes!(
         show_trace=false,
         extended_trace=true,
         g_tol=1e-5
-      );
-      autodiff=:forward))
+      )))
   return vrandeffsorth
 end
 
@@ -265,9 +278,8 @@ function empirical_bayes_dist(m::PumasModel,
   parset = m.random(param)
   trf = totransform(parset)
 
-  dv_∂²l∂η² = ∂²l∂η²(m, subject, param, vrandeffsorth, approx, args...; kwargs...)
-  # 3 is W, should we make is a named tuple with l, g, W?
-  V = inv(sum(_dv_∂²l∂η²[3] for _dv_∂²l∂η² in dv_∂²l∂η²) + I)
+  _, _, _∂²l∂η² = ∂²l∂η²(m, subject, param, vrandeffsorth, approx, args...; kwargs...)
+  V = inv(_∂²l∂η² + I)
 
   i = 1
   tmp = map(trf.transformations) do t
@@ -330,67 +342,6 @@ function marginal_nll(m::PumasModel,
 end
 
 function marginal_nll(m::PumasModel,
-                      # restrict to Vector to avoid distributed arrays taking
-                      # this path
-                      population::Vector{<:Subject},
-                      args...;
-                      parallel_type::ParallelType=Threading,
-                      kwargs...)
-
-  nll1 = marginal_nll(m, population[1], args...; kwargs...)
-  # Compute first subject separately to determine return type and to return
-  # early in case the parameter values cause the likelihood to be Inf. This
-  # can e.g. happen if the ODE solver can't solve the ODE for the chosen
-  # parameter values.
-  if isinf(nll1)
-    return nll1
-  end
-
-  # The different parallel computations are separated out into functions
-  # to make it easier to infer the return types
-  if parallel_type === Serial
-    return sum(subject -> marginal_nll(m, subject, args...; kwargs...), population)
-  elseif parallel_type === Threading
-    return _marginal_nll_threads(nll1, m, population, args...; kwargs...)
-  elseif parallel_type === Distributed # Distributed
-    return _marginal_nll_pmap(nll1, m, population, args...; kwargs...)
-  else
-    throw(ArgumentError("parallel type $parallel_type not implemented"))
-  end
-end
-
-function _marginal_nll_threads(nll1::T,
-                               m::PumasModel,
-                               population::Vector{<:Subject},
-                               args...;
-                               kwargs...)::T where T
-
-  # Allocate array to store likelihood values for each subject in the threaded
-  # for loop
-  nlls = fill(T(Inf), length(population) - 1)
-
-  # Run threaded for loop for the remaining subjects
-  Threads.@threads for i in 2:length(population)
-    nlls[i - 1] = marginal_nll(m, population[i], args...; kwargs...)
-  end
-
-  return nll1 + sum(nlls)
-end
-
-function _marginal_nll_pmap(nll1::T,
-                            m::PumasModel,
-                            population::Vector{<:Subject},
-                            args...;
-                            kwargs...)::T where T
-
-  nlls = convert(Vector{T},
-                 pmap(subject -> marginal_nll(m, subject, args...; kwargs...),
-                 population[2:length(population)]))
-
-    return nll1 + sum(nlls)
-end
-
-function marginal_nll(m::PumasModel,
                       subject::Subject,
                       param::NamedTuple,
                       vrandeffsorth::AbstractVector,
@@ -412,19 +363,14 @@ function marginal_nll(m::PumasModel,
   @assert iszero(vrandeffsorth)
 
   # Compute the gradient of the likelihood and Hessian approxmation in the random effect vector η
-  dv_∂²l∂η² = ∂²l∂η²(m, subject, param, vrandeffsorth, approx, args...; kwargs...)
+  nl, dldη, W  = ∂²l∂η²(m, subject, param, vrandeffsorth, approx, args...; kwargs...)
 
-  sum(map(_dv_∂²l∂η² -> _marginal_nll(_dv_∂²l∂η², approx), dv_∂²l∂η²))
-end
-# this is the marginal_nll calculation for a single DV
-function _marginal_nll(_dv_∂²l∂η², approx::FO)
-    nl, dldη, W = _dv_∂²l∂η²
-    if isfinite(nl)
-      FIW = cholesky(Symmetric(Matrix(I + W)))
-      return nl + (- dldη'*(FIW\dldη) + logdet(FIW))/2
-    else # conditional likelihood return Inf
-      return typeof(nl)(Inf)
-    end
+  if isfinite(nl)
+    FIW = cholesky(Symmetric(Matrix(I + W)))
+    return nl + (- dldη'*(FIW\dldη) + logdet(FIW))/2
+  else # conditional likelihood return Inf
+    return typeof(nl)(Inf)
+  end
 end
 
 function marginal_nll(m::PumasModel,
@@ -434,13 +380,8 @@ function marginal_nll(m::PumasModel,
                       approx::Union{FOCE,FOCEI,LaplaceI},
                       args...; kwargs...)::promote_type(numtype(param), numtype(vrandeffsorth))
 
-  dv_∂²l∂η² = ∂²l∂η²(m, subject, param, vrandeffsorth, approx, args...; kwargs...)
+  nl, _, W = ∂²l∂η²(m, subject, param, vrandeffsorth, approx, args...; kwargs...)
 
-  sum(map(_dv_∂²l∂η² -> _marginal_nll(_dv_∂²l∂η², vrandeffsorth, approx), dv_∂²l∂η²))
-end
-
-function _marginal_nll(_dv_∂²l∂η², vrandeffsorth, approx::Union{FOCE,FOCEI,LaplaceI})
-  nl, _, W = _dv_∂²l∂η²
   if isfinite(nl)
     # If the factorization succeeded then compute the approximate marginal likelihood. Otherwise, return Inf.
     # FIXME. For now we have to convert to matrix to have the check=false version available. Eventually,
@@ -491,6 +432,81 @@ function marginal_nll(m::PumasModel,
   -log(sol.u)
 end
 
+# marginall_nll for whole populations
+function marginal_nll(m::PumasModel,
+                      # restrict to Vector to avoid distributed arrays taking
+                      # this path
+                      population::Vector{<:Subject},
+                      args...;
+                      ensemblealg::DiffEqBase.EnsembleAlgorithm=EnsembleThreads(),
+                      kwargs...)
+
+  nll1 = marginal_nll(m, population[1], args...; kwargs...)
+  # Compute first subject separately to determine return type and to return
+  # early in case the parameter values cause the likelihood to be Inf. This
+  # can e.g. happen if the ODE solver can't solve the ODE for the chosen
+  # parameter values.
+  if isinf(nll1)
+    return nll1
+  end
+
+  # The different parallel computations are separated out into functions
+  # to make it easier to infer the return types
+  if ensemblealg isa EnsembleSerial
+    return sum(subject -> marginal_nll(m, subject, args...; kwargs...), population)
+  elseif ensemblealg isa EnsembleThreads
+    return _marginal_nll_threads(nll1, m, population, args...; kwargs...)
+  elseif ensemblealg isa EnsembleDistributed
+    return _marginal_nll_pmap(nll1, m, population, args...; kwargs...)
+  else
+    throw(ArgumentError("Parallelism of type $ensemblealg is not currently implemented for estimation."))
+  end
+end
+
+function _marginal_nll_threads(nll1::T,
+                               m::PumasModel,
+                               population::Vector{<:Subject},
+                               args...;
+                               kwargs...)::T where T
+
+  # Allocate array to store likelihood values for each subject in the threaded
+  # for loop
+  nlls = fill(T(Inf), length(population) - 1)
+
+  # Run threaded for loop for the remaining subjects
+  Threads.@threads for i in 2:length(population)
+    nlls[i - 1] = marginal_nll(m, population[i], args...; kwargs...)
+  end
+
+  return nll1 + sum(nlls)
+end
+
+function _marginal_nll_pmap(nll1::T,
+                            m::PumasModel,
+                            population::Vector{<:Subject},
+                            args...;
+                            kwargs...)::T where T
+
+  nlls = convert(Vector{T},
+                 pmap(subject -> marginal_nll(m, subject, args...; kwargs...),
+                 population[2:length(population)]))
+
+    return nll1 + sum(nlls)
+end
+
+function marginal_nll(m::PumasModel,
+                      # restrict to Vector to avoid distributed arrays taking
+                      # this path
+                      population::Vector{<:Subject},
+                      param::NamedTuple,
+                      vvrandeffsorth::Vector,
+                      args...; kwargs...)
+
+  return sum(zip(population, vvrandeffsorth)) do (subject, vrandeffsorth)
+    marginal_nll(m, subject, param, vrandeffsorth, args...; kwargs...)
+  end
+end
+
 # deviance is NONMEM-equivalent marginal negative loglikelihood
 """
     deviance(model, subject, param[, param], approx, ...)
@@ -502,12 +518,12 @@ this is scaled and shifted slightly from [`marginal_nll`](@ref).
 StatsBase.deviance(m::PumasModel,
                    subject::Subject,
                    args...; kwargs...) =
-    2marginal_nll(m, subject, args...; kwargs...) - count(!ismissing, first(subject.observations))*log(2π)
+    2marginal_nll(m, subject, args...; kwargs...) - sum(map(dv -> count(!ismissing, dv), subject.observations))*log(2π)
 
 StatsBase.deviance(m::PumasModel,
                    data::Population,
                    args...; kwargs...) =
-    2marginal_nll(m, data, args...; kwargs...) - sum(subject->count(!ismissing, first(subject.observations)), data)*log(2π)
+    2marginal_nll(m, data, args...; kwargs...) - sum(subject -> sum(dv -> count(!ismissing, dv), subject.observations), data)*log(2π)
 # NONMEM doesn't allow ragged, so this suffices for testing
 
 # Compute the gradient of marginal_nll without solving inner optimization
@@ -531,83 +547,62 @@ function marginal_nll_gradient!(g::AbstractVector,
                                 vrandeffsorth::AbstractVector,
                                 approx::Union{FOCE,FOCEI,LaplaceI},
                                 trf::TransformVariables.TransformTuple,
-                                args...;
-                                # We explicitly use reltol to compute the right step size for finite difference based gradient
-                                reltol=DEFAULT_ESTIMATION_RELTOL,
-                                fdtype=Val{:central}(),
-                                fdrelstep=_fdrelstep(model, vparam, reltol, fdtype),
-                                fdabsstep=fdrelstep^2,
-                                kwargs...
-                                )
+                                args...; kwargs...)
 
   param = TransformVariables.transform(trf, vparam)
 
-  # Compute first order derivatives of the marginal likelihood function
-  # with finite differencing to save compute time
-  ∂ℓᵐ∂θ = DiffEqDiffTools.finite_difference_gradient(
-    _vparam -> marginal_nll(
-      model,
-      subject,
-      TransformVariables.transform(trf, _vparam),
-      vrandeffsorth,
-      approx,
-      args...;
-      reltol=reltol,
-      kwargs...
-    ),
-    vparam,
-    relstep=fdrelstep,
-    absstep=fdabsstep
-  )
+  _cs = max(1, div(8, length(vrandeffsorth)))
 
-  ∂ℓᵐ∂η = DiffEqDiffTools.finite_difference_gradient(
-    vηorth -> marginal_nll(
-      model,
-      subject,
-      param,
-      vηorth,
-      approx,
-      args...;
-      reltol=reltol,
-      kwargs...
-    ),
+  _f_∂ℓᵐ∂θ = _vparam -> marginal_nll(
+    model,
+    subject,
+    TransformVariables.transform(trf, _vparam),
     vrandeffsorth,
-    relstep=fdrelstep,
-    absstep=fdabsstep
+    approx,
+    args...; kwargs...
   )
+  cs = min(length(vparam), _cs)
+  cfg_∂ℓᵐ∂θ = ForwardDiff.GradientConfig(_f_∂ℓᵐ∂θ, vparam, ForwardDiff.Chunk{cs}())
+  ∂ℓᵐ∂θ = ForwardDiff.gradient(_f_∂ℓᵐ∂θ, vparam, cfg_∂ℓᵐ∂θ)
 
-  # Compute second order derivatives in high precision with ForwardDiff
-  ∂²ℓᵖ∂η² = ForwardDiff.hessian(
-    vηorth -> penalized_conditional_nll(
-      model,
-      subject,
-      param,
-      vηorth,
-      approx,
-      args...;
-      reltol=reltol,
-      kwargs...),
-    vrandeffsorth
+  _f_∂ℓᵐ∂η = vηorth -> marginal_nll(
+    model,
+    subject,
+    param,
+    vηorth,
+    approx,
+    args...; kwargs...
   )
+  cs = min(length(vrandeffsorth), _cs)
+  cfg_∂ℓᵐ∂η = ForwardDiff.GradientConfig(_f_∂ℓᵐ∂η, vrandeffsorth, ForwardDiff.Chunk{cs}())
+  ∂ℓᵐ∂η = ForwardDiff.gradient(_f_∂ℓᵐ∂η, vrandeffsorth, cfg_∂ℓᵐ∂η)
 
-  ∂²ℓᵖ∂η∂θ = ForwardDiff.jacobian(
-    _vparam -> begin
-      _param = TransformVariables.transform(trf, _vparam)
-      ForwardDiff.gradient(
-        vηorth -> penalized_conditional_nll(
-          model,
-          subject,
-          _param,
-          vηorth,
-          approx,
-          args...;
-          reltol=reltol,
-          kwargs...),
-        vrandeffsorth
-      )
-    end,
-    vparam
-  )
+  _f_∂²ℓᵖ∂η² = vηorth -> penalized_conditional_nll(
+    model,
+    subject,
+    param,
+    vηorth,
+    approx,
+    args...; kwargs...)
+  cs = min(length(vrandeffsorth), 3)
+  cfg_∂²ℓᵖ∂η² = ForwardDiff.HessianConfig(_f_∂²ℓᵖ∂η², vrandeffsorth, ForwardDiff.Chunk{cs}())
+  ∂²ℓᵖ∂η² = ForwardDiff.hessian(_f_∂²ℓᵖ∂η², vrandeffsorth, cfg_∂²ℓᵖ∂η²)
+
+  _f_∂²ℓᵖ∂η∂θ = _vparam -> begin
+    _param = TransformVariables.transform(trf, _vparam)
+    ForwardDiff.gradient(
+      vηorth -> penalized_conditional_nll(
+        model,
+        subject,
+        _param,
+        vηorth,
+        approx,
+        args...; kwargs...),
+      vrandeffsorth
+    )
+  end
+  cfg_∂²ℓᵖ∂η∂θ = ForwardDiff.JacobianConfig(_f_∂²ℓᵖ∂η∂θ, vparam, ForwardDiff.Chunk{1}())
+  ∂²ℓᵖ∂η∂θ = ForwardDiff.jacobian(_f_∂²ℓᵖ∂η∂θ, vparam, cfg_∂²ℓᵖ∂η∂θ)
 
   dηdθ = -∂²ℓᵖ∂η² \ ∂²ℓᵖ∂η∂θ
 
@@ -620,14 +615,14 @@ function _fdrelstep(model::PumasModel, param, reltol, ::Val{:forward})
   if model.prob isa ExplicitModel
     return sqrt(eps(numtype(param)))
   else
-    return max(norm(reltol), sqrt(eps(numtype(param))))
+    return sqrt(reltol)
   end
 end
 function _fdrelstep(model::PumasModel, param, reltol, ::Val{:central})
   if model.prob isa ExplicitModel
     return cbrt(eps(numtype(param)))
   else
-    return max(norm(reltol), cbrt(eps(numtype(param))))
+    return cbrt(reltol)
   end
 end
 
@@ -641,32 +636,21 @@ function marginal_nll_gradient!(g::AbstractVector,
                                 vrandeffsorth::AbstractVector,
                                 approx::Union{NaivePooled,FO,FOI,LLQuad},
                                 trf::TransformVariables.TransformTuple,
-                                args...;
-                                # We explicitly use reltol to compute the right step size for finite difference based gradient
-                                reltol=DEFAULT_ESTIMATION_RELTOL,
-                                fdtype=Val{:central}(),
-                                fdrelstep=_fdrelstep(model, vparam, reltol, fdtype),
-                                fdabsstep=fdrelstep^2,
-                                kwargs...
+                                args...; kwargs...
                                 )
 
   # Compute first order derivatives of the marginal likelihood function
   # with finite differencing to save compute time
-  g .= DiffEqDiffTools.finite_difference_gradient(
+  g .= FiniteDiff.finite_difference_gradient(
     _vparam -> marginal_nll(
       model,
       subject,
       TransformVariables.transform(trf, _vparam),
       vrandeffsorth,
       approx,
-      args...;
-      reltol=reltol,
-      kwargs...
+      args...; kwargs...
     ),
     vparam,
-    typeof(fdtype);
-    relstep=fdrelstep,
-    absstep=fdabsstep
   )
 
   return g
@@ -759,79 +743,19 @@ function ∂²l∂η²(m::PumasModel,
   _derived_dist = _derived_vηorth_gradient(m, subject, param, vrandeffsorth, args...; kwargs...)
 
   if any(d->d isa Nothing, _derived_dist)
-    return map(x->(Inf, nothing, nothing), subject.observations)
+    return (Inf, nothing, nothing)
   end
 
   dv_keys = keys(subject.observations)
 
   dv_dist = NamedTuple{dv_keys}(_derived_dist)
-  dv_zip = NamedTuple{dv_keys}(zip(dv_keys, subject.observations, dv_dist))
+  dv_zip = NamedTuple{dv_keys}(zip(subject.observations, dv_dist))
 
-  return map(d -> _∂²l∂η²(d[2], d[3], approx), dv_zip)
-end
+  ∂²l∂η²s = map(((obs, dv),) -> _∂²l∂η²(obs, dv, approx), dv_zip)
 
-function _∂²l∂η²(obsdv::AbstractVector, dv::AbstractVector{<:Normal}, ::FO)
-  # The dimension of the random effect vector
-  nrfx = length(ForwardDiff.partials(first(dv).μ))
-
-  # Initialize Hessian matrix and gradient vector
-  ## FIXME! Careful about hardcoding for Float64 here
-  H    = @SMatrix zeros(nrfx, nrfx)
-  dldη = @SVector zeros(nrfx)
-  nl   = 0.0
-
-  # Loop through the distribution vector and extract derivative information
-  for j in eachindex(dv)
-    obsdvj = obsdv[j]
-
-    # We ignore missing observations when estimating the model
-    if ismissing(obsdvj)
-      continue
-    end
-
-    dvj = dv[j]
-    r = ForwardDiff.value(dvj.σ)^2
-    f = SVector(ForwardDiff.partials(dvj.μ).values)
-    fdr = f/r
-
-    H    += fdr*f'
-    dldη += fdr*(obsdvj - ForwardDiff.value(dvj.μ))
-    nl   -= ForwardDiff.value(_lpdf(dvj, obsdvj))
+  return map((1, 2, 3)) do i
+    sum(∂²l∂η²s[dv_key][i] for dv_key in dv_keys)
   end
-
-  return nl, dldη, H
-end
-
-function _∂²l∂η²(obsdv::AbstractVector, dv::AbstractVector{<:LogNormal}, ::FO)
-  # The dimension of the random effect vector
-  nrfx = length(ForwardDiff.partials(first(dv).μ))
-
-  # Initialize Hessian matrix and gradient vector
-  ## FIXME! Careful about hardcoding for Float64 here
-  H    = @SMatrix zeros(nrfx, nrfx)
-  dldη = @SVector zeros(nrfx)
-  nl   = 0.0
-
-  # Loop through the distribution vector and extract derivative information
-  for j in eachindex(dv)
-    obsdvj = obsdv[j]
-
-    # We ignore missing observations when estimating the model
-    if ismissing(obsdvj)
-      continue
-    end
-
-    dvj = dv[j]
-    r = ForwardDiff.value(dvj.σ)^2
-    f = SVector(ForwardDiff.partials(dvj.μ).values)
-    fdr = f/r
-
-    H    += fdr*f'
-    dldη += fdr*(log(obsdvj) - ForwardDiff.value(dvj.μ))
-    nl   -= ForwardDiff.value(_lpdf(dvj, obsdvj))
-  end
-
-  return nl, dldη, H
 end
 
 # Helper function to detect homoscedasticity. For now, it is assumed the input dv vecotr containing
@@ -854,6 +778,41 @@ _var( d::Union{Bernoulli,Binomial,Exponential,Gamma,Normal,Poisson}) = var(d)
 _var( d::LogNormal) = d.σ^2
 _var( d::NegativeBinomial) = (1 - d.p)/d.p^2*d.r
 
+_log(::Distribution, obs) = obs
+_log(::LogNormal   , obs) = log(obs)
+
+function _∂²l∂η²(obsdv::AbstractVector, dv::AbstractVector{<:Union{Normal,LogNormal}}, ::FO)
+  # The dimension of the random effect vector
+  nrfx = length(ForwardDiff.partials(first(dv).μ))
+
+  # Initialize Hessian matrix and gradient vector
+  ## FIXME! Careful about hardcoding for Float64 here
+  H    = @SMatrix zeros(nrfx, nrfx)
+  dldη = @SVector zeros(nrfx)
+  nl   = 0.0
+
+  # Loop through the distribution vector and extract derivative information
+  for j in eachindex(dv)
+    obsj = obsdv[j]
+
+    # We ignore missing observations when estimating the model
+    if ismissing(obsj)
+      continue
+    end
+
+    dvj = dv[j]
+    r = ForwardDiff.value(dvj.σ)^2
+    f = SVector(ForwardDiff.partials(dvj.μ).values)
+    fdr = f/r
+
+    H    += fdr*f'
+    dldη += fdr*(_log(dvj, obsj) - ForwardDiff.value(dvj.μ))
+    nl   -= ForwardDiff.value(_lpdf(dvj, obsj))
+  end
+
+  return nl, dldη, H
+end
+
 # This version handles the exponential family and LogNormal (through the special _mean
 # and _var methods.)
 function _∂²l∂η²(obsdv::AbstractVector, dv_d::AbstractVector{<:Distribution}, ::FOCE)
@@ -868,20 +827,23 @@ function _∂²l∂η²(obsdv::AbstractVector, dv_d::AbstractVector{<:Distributi
   # Initialize Hessian matrix and gradient vector
   ## FIXME! Careful about hardcoding for Float64 here
   H    = @SMatrix zeros(nrfx, nrfx)
+  dldη = @SVector zeros(nrfx)
   nl   = 0.0
 
   for j in eachindex(dv_d)
-    obj = obsdv[j]
-    if ismissing(obj)
+    obsj = obsdv[j]
+    if ismissing(obsj)
       continue
     end
-    dvj = dv_d[j]
-    f   = SVector(ForwardDiff.partials(_mean(dvj)).values)
-    H  += f/ForwardDiff.value(_var(dvj))*f'
-    nl -= ForwardDiff.value(_lpdf(dvj, obj))
+    dvj   = dv_d[j]
+    f     = SVector(ForwardDiff.partials(_mean(dvj)).values)
+    fdr   = f/ForwardDiff.value(_var(dvj))
+    H    += fdr*f'
+    dldη -= fdr*(_log(dvj, obsj) - ForwardDiff.value(_mean(dvj)))
+    nl   -= ForwardDiff.value(_lpdf(dvj, obsj))
   end
 
-  return nl, nothing, H
+  return nl, dldη, H
 end
 
 # Categorical
@@ -892,23 +854,28 @@ function _∂²l∂η²(obsdv::AbstractVector, dv_d::AbstractVector{<:Categorica
   # Initialize Hessian matrix and gradient vector
   ## FIXME! Careful about hardcoding for Float64 here
   H    = @SMatrix zeros(nrfx, nrfx)
+  dldη = @SVector zeros(nrfx)
   nl   = 0.0
 
   for j in eachindex(dv_d)
-    obj = obsdv[j]
-    if ismissing(obj)
+    obsj = obsdv[j]
+    if ismissing(obsj)
       continue
     end
     dvj = dv_d[j]
     # Loop through probabilities and add contributions to Hessian
-    for pl in probs(dvj)
-      f  = SVector(ForwardDiff.partials(pl).values)
-      H += f/ForwardDiff.value(pl)*f'
+    for (l, pl) in enumerate(probs(dvj))
+      f   = SVector(ForwardDiff.partials(pl).values)
+      fdp = f/ForwardDiff.value(pl)
+      if l == obsj
+        dldη -= fdp
+      end
+      H += fdp*f'
     end
-    nl -= ForwardDiff.value(_lpdf(dvj, obj))
+    nl   -= ForwardDiff.value(_lpdf(dvj, obsj))
   end
 
-  return nl, nothing, H
+  return nl, dldη, H
 end
 
 function _∂²l∂η²(obsdv::AbstractVector, dv::AbstractVector{<:Union{Normal,LogNormal}}, ::FOCEI)
@@ -918,26 +885,28 @@ function _∂²l∂η²(obsdv::AbstractVector, dv::AbstractVector{<:Union{Normal
   # Initialize Hessian matrix and gradient vector
   ## FIXME! Careful about hardcoding for Float64 here
   H    = @SMatrix zeros(nrfx, nrfx)
+  dldη = @SVector zeros(nrfx)
   nl   = 0.0
 
   for j in eachindex(dv)
-    obj = obsdv[j]
-    if ismissing(obj)
+    obsj = obsdv[j]
+    if ismissing(obsj)
       continue
     end
     dvj   = dv[j]
     r_inv = inv(ForwardDiff.value(dvj.σ^2))
     f     = SVector(ForwardDiff.partials(dvj.μ).values)
     del_r = SVector(ForwardDiff.partials(dvj.σ.^2).values)
+    res   = _log(dvj, obsj) - ForwardDiff.value(dvj.μ)
 
-    H  += f*r_inv*f' + (r_inv*del_r*r_inv*del_r')/2
-    nl -= ForwardDiff.value(_lpdf(dvj, obj))
+    H    += f*r_inv*f' + (r_inv*del_r*r_inv*del_r')/2
+    dldη -= (-del_r/2 + f*res + res^2*del_r*r_inv/2)*r_inv
+    nl   -= ForwardDiff.value(_lpdf(dvj, obsj))
   end
 
-  return nl, nothing, H
+  return nl, dldη, H
 end
 
-# FIXME LaplaceI only support one dv.
 function ∂²l∂η²(m::PumasModel,
                 subject::Subject,
                 param::NamedTuple,
@@ -949,7 +918,9 @@ function ∂²l∂η²(m::PumasModel,
     throw("LaplaceI currently does not support multiple DVs, use FOCEI instead.")
   end
   # Initialize HessianResult for computing Hessian, gradient and value of negative loglikelihood in one go
-  diffres = DiffResults.HessianResult(vrandeffsorth)
+  T = promote_type(numtype(param), numtype(vrandeffsorth))
+  _vrandeffsorth = convert(AbstractVector{T}, vrandeffsorth)
+  diffres = DiffResults.HessianResult(_vrandeffsorth)
 
   # Compute the derivates
   ForwardDiff.hessian!(diffres,
@@ -964,9 +935,9 @@ function ∂²l∂η²(m::PumasModel,
   vrandeffsorth)
 
 #   # Extract the derivatives
-  nl, W = DiffResults.value(diffres), DiffResults.hessian(diffres)
+  return  DiffResults.value(diffres), DiffResults.gradient(diffres), DiffResults.hessian(diffres)
 
-  return map(x -> (nl, nothing, W), subject.observations)
+  return map(x -> (nl, dldη, W), subject.observations)
 end
 
 # Fallbacks
@@ -1190,8 +1161,20 @@ function Base.getproperty(f::FittedPumasModel{<:Any,<:Any,<:Optim.MultivariateOp
   end
 end
 
-marginal_nll(      f::FittedPumasModel) = marginal_nll(f.model, f.data, coef(f), f.approx)
-StatsBase.deviance(f::FittedPumasModel) = deviance(    f.model, f.data, coef(f), f.approx)
+marginal_nll(fpm::FittedPumasModel) = marginal_nll(
+  fpm.model,
+  fpm.data,
+  coef(fpm),
+  fpm.vvrandeffsorth,
+  fpm.approx,
+  fpm.args...; fpm.kwargs...)
+StatsBase.deviance(fpm::FittedPumasModel) = deviance(
+  fpm.model,
+  fpm.data,
+  coef(fpm),
+  fpm.vvrandeffsorth,
+  fpm.approx,
+  fpm.args...; fpm.kwargs...)
 
 function _observed_information(f::FittedPumasModel,
                                 ::Val{Score},
@@ -1244,7 +1227,7 @@ function _observed_information(f::FittedPumasModel,
     end
 
     # Compute Hessian contribution and update Hessian
-    DiffEqDiffTools.finite_difference_jacobian!(_H,_f,vparam,
+    FiniteDiff.finite_difference_jacobian!(_H,_f,vparam,
                                                      Val{:central};
                                                      relstep=fdrelstep_hessian,
                                                      absstep=fdrelstep_hessian^2)
@@ -1348,7 +1331,7 @@ function _expected_information_fd(
   ___E = _vparam -> __E_and_V(_vparam)[1]
   ___V = _vparam -> vec(__E_and_V(_vparam)[2])
 
-  dEdθ = DiffEqDiffTools.finite_difference_jacobian(
+  dEdθ = FiniteDiff.finite_difference_jacobian(
     ___E,
     vparam,
     typeof(fdtype),
@@ -1356,7 +1339,7 @@ function _expected_information_fd(
     relstep=fdrelstep,
     absstep=fdabsstep
   )
-  JV = DiffEqDiffTools.finite_difference_jacobian(
+  JV = FiniteDiff.finite_difference_jacobian(
     ___V,
     vparam,
     typeof(fdtype),
@@ -1388,9 +1371,9 @@ function StatsBase.informationmatrix(f::FittedPumasModel; expected::Bool=true)
   param         = coef(f)
   vrandeffsorth = f.vvrandeffsorth
   if expected
-    return sum(_expected_information(model, data[i], param, vrandeffsorth[i], f.approx) for i in 1:length(data))
+    return sum(_expected_information(model, data[i], param, vrandeffsorth[i], f.approx, f.args...; f.kwargs...) for i in 1:length(data))
   else
-    return first(_observed_information(f, Val(false)))
+    return first(_observed_information(f, Val(false), args...; kwargs...))
   end
 end
 
@@ -1399,10 +1382,10 @@ end
 
 Compute the covariance matrix of the population parameters
 """
-function StatsBase.vcov(f::FittedPumasModel, args...; kwargs...)
+function StatsBase.vcov(f::FittedPumasModel)
 
   # Compute the observed information based on the Hessian (H) and the product of the outer scores (S)
-  H, S = _observed_information(f, Val(true), args...; kwargs...)
+  H, S = _observed_information(f, Val(true), f.args...; f.kwargs...)
 
   # Use generialized eigenvalue decomposition to compute inv(H)*S*inv(H)
   F = eigen(Symmetric(H), Symmetric(S))
@@ -1517,9 +1500,9 @@ end
 Compute the `vcov` matrix and return a struct used for inference
 based on the fitted model `fpm`.
 """
-function infer(fpm::FittedPumasModel, args...; level = 0.95, kwargs...)
+function infer(fpm::FittedPumasModel; level = 0.95)
   print("Calculating: variance-covariance matrix")
-  _vcov = vcov(fpm, args...; kwargs...)
+  _vcov = vcov(fpm, fpm.args...; fpm.kwargs...)
   println(". Done.")
   FittedPumasModelInference(fpm, _vcov, level)
 end
@@ -1532,6 +1515,6 @@ end
 # empirical_bayes_dist for FittedPumasModel
 function empirical_bayes_dist(fpm::FittedPumasModel)
   map(zip(fpm.data, fpm.vvrandeffsorth)) do (subject, vrandeffsorth)
-      empirical_bayes_dist(fpm.model, subject, coef(fpm), vrandeffsorth, fpm.approx)
+      empirical_bayes_dist(fpm.model, subject, coef(fpm), vrandeffsorth, fpm.approx, fpm.args...; fpm.kwargs...)
   end
 end

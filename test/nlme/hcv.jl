@@ -1,70 +1,13 @@
-using Pumas, LinearAlgebra
+using Pumas, Random
 
-@testset "Test informationmatrix with warfarin data" begin
+@testset "Median size ODE problem (HCV model)" begin
+  t = [0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 6.99, 10.0, 13.99, 20.99, 28.0]
 
-  data = read_pumas(example_data("warfarin"))
-
-  model = @model begin
-
-    @param begin
-      θ₁ ∈ RealDomain(lower=0.0, init=0.15)
-      θ₂ ∈ RealDomain(lower=0.0, init=8.0)
-      θ₃ ∈ RealDomain(lower=0.0, init=1.0)
-      Ω  ∈ PDiagDomain(3)
-      σ  ∈ RealDomain(lower=0.0001, init=0.01)
-    end
-
-    @random begin
-      η ~ MvNormal(Ω)
-    end
-
-    @pre begin
-      Tvcl = θ₁
-      Tvv  = θ₂
-      Tvka = θ₃
-      CL   = Tvcl*exp(η[1])
-      V    = Tvv*exp(η[2])
-      Ka   = Tvka*exp(η[3])
-    end
-
-    @dynamics Depots1Central1
-
-    @vars begin
-      conc = Central/V
-    end
-
-    @derived begin
-      dv ~ @. Normal(log(conc), sqrt(σ))
-    end
-  end
-
-  param = (θ₁ = 0.15,
-           θ₂ = 8.0,
-           θ₃ = 1.0,
-           Ω  = Diagonal([0.07, 0.02, 0.6]),
-           σ  = 0.01)
-
-  @test logdet(
-    sum(
-      Pumas._expected_information(
-        model,
-        d,
-        param,
-        Pumas._orth_empirical_bayes(model, d, param, Pumas.FO()),
-        Pumas.FO()
-      ) for d in data)) ≈ 53.8955 rtol=1e-6
-
-  ft = fit(model, data, param, Pumas.FO())
-
-  @test logdet(informationmatrix(ft)) isa Number
-
-end
-
-@testset "Multiple dvs. (The HCV model)" begin
+  # Use the @model macro to use the Pumas DSL for PK/PD models
   peg_inf_model = @model begin
     # The "@param" block specifies the parameters
     @param begin
-      # fixed effects paramters
+      # fixed effects with lower and upper bounds
       logθKa   ∈  RealDomain()
       logθKe   ∈  RealDomain()
       logθVd   ∈  RealDomain()
@@ -125,7 +68,7 @@ end
       A' = exp(logKa)*X - exp(logKe)*A
       T' = s - T*(e*W + d)
       I' = e*W*T - exp(logδ)*I
-      W' = p/((A/exp(logVd)/exp(logEC50))^exp(logn) + 1)*I - exp(logc)*W
+      W' = p/((A/exp(logVd)/exp(logEC50) + 1e-100)^exp(logn) + 1)*I - exp(logc)*W
     end
 
     # The derived block is used to model the dependent variables. Both will
@@ -161,9 +104,21 @@ end
     σ²PK = 0.04,
     σ²PD = 0.04)
 
-  t = [0.0, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 7.0, 10.0, 14.0, 21.0, 28.0]
+  _pop = map(i -> Subject(id=i, obs=(yPK=[], yPD=[]), evs=peg_inf_dr, time=t), 1:3)
 
-  _sub = Subject(id=1, evs=peg_inf_dr, time=t, obs=(yPK=zeros(length(t)), yPD=zeros(length(t))))
+  # Simulate data for estimation (fix seed for reproducibility)
+  Random.seed!(123)
+  simdata = simobs(peg_inf_model, _pop, param_PKPD, ensemblealg = EnsembleSerial())
 
-  @test logdet(Pumas._expected_information_fd(peg_inf_model, _sub, param_PKPD, zeros(7), Pumas.FO())*30) ≈ 92.21128100630904 rtol=1e-6
+  pd = Subject.(simdata)
+
+  ft = fit(
+    peg_inf_model,
+    pd,
+    param_PKPD,
+    Pumas.FOCE(),
+    optimize_fn=Pumas.DefaultOptimizeFN(show_trace=true, x_reltol=1e-3))
+
+  @test deviance(ft) ≈ -100.78347 rtol=1e-5
+
 end

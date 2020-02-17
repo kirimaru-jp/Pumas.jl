@@ -1,9 +1,9 @@
-using Pumas, ForwardDiff, DiffEqDiffTools, Test, Random, LabelledArrays, DiffResults
+using Pumas, ForwardDiff, FiniteDiff, Test, Random, LabelledArrays, DiffResults
 
 AD_gradient = ForwardDiff.gradient
 AD_hessian = ForwardDiff.hessian
-FD_gradient = DiffEqDiffTools.finite_difference_gradient
-FD_jacobian = DiffEqDiffTools.finite_difference_jacobian
+FD_gradient = FiniteDiff.finite_difference_gradient
+FD_jacobian = FiniteDiff.finite_difference_jacobian
 FD_hessian = function (f, x)
     grad_fun = y -> FD_gradient(f, y)
     FD_jacobian(grad_fun, x, Val{:central}, eltype(x))
@@ -64,11 +64,13 @@ end
                 σ = RealDomain(lower=0.0, init=1.0)))
     rfx_f(p) = ParamSet((η=MvNormal(p.Ω),))
     function col_f(param,randeffs,subject)
-        cov = subject.covariates
-        (Ka = param.θ[1],
-        CL = param.θ[2] * ((cov.wt/70)^0.75) * (param.θ[4]^cov.sex) * exp(randeffs.η[1]),
-        V  = param.θ[3] * exp(randeffs.η[2]),
-        σ = param.σ)
+        function pre(t=nothing)
+            cov = subject.covariates
+            (Ka = param.θ[1],
+            CL = param.θ[2] * ((cov.wt/70)^0.75) * (param.θ[4]^cov.sex) * exp(randeffs.η[1]),
+            V  = param.θ[3] * exp(randeffs.η[2]),
+            σ = param.σ)
+        end
     end
     init_f(col,t0) = @LArray [0.0, 0.0] (:Depot, :Central)
     function onecompartment_f(du,u,p,t)
@@ -77,11 +79,13 @@ end
         du.Central = p.Ka*u.Depot - p.CL*cp
     end
     prob = ODEProblem(onecompartment_f,nothing,nothing,nothing)
-    function derived_f(col,sol,obstimes,subject)
+    function derived_f(col,sol,obstimes,subject, param, randeffs)
+        col_t = col() # no time covar
+        V = col_t.V
         central = sol(obstimes;idxs=2)
-        conc = @. central / col.V
+        conc = @. central / V
         cmax = maximum(conc)
-        (conc = conc, cmax = cmax, dv = @. Normal(conc, conc*col.σ))
+        (conc = conc, cmax = cmax, dv = @. Normal(conc, conc*param.σ))
     end
     model_ip = PumasModel(p,rfx_f,col_f,init_f,prob,derived_f)
 
@@ -134,7 +138,7 @@ end
     Pumas.marginal_nll(model_ip,subject,param,Pumas.LaplaceI())
 end
 
-@testset "Magic argument - lags" begin
+@testset "DCP - lags" begin
     # Test 3 of template_model_ev_system.jl
     mlag = @model begin
         @param    θ ∈ VectorDomain(4, lower=zeros(4), init=ones(4))
@@ -158,8 +162,23 @@ end
         end
     end
 
-    subject = read_pumas(example_data("event_data/data2"),
-                         cvs = [], dvs = [:cp])[1]
+    subject = Subject(evs=DosageRegimen(100))#read_pumas(example_data("event_data/data2"), dvs = [:cp])[1]
+
+    θ₀ = [1.5, 1.0, 30.0, 5.0]
+    param = (θ = θ₀,)
+    randeffs = (η = [0.0,0.0],)
+
+    test_fun = function(θ)
+        _param = (θ = θ,)
+        sim = simobs(mlag, subject, _param, randeffs; abstol=1e-14, reltol=1e-14)
+        sim[:cmax]
+    end
+
+    grad_FD = FD_gradient(test_fun, θ₀)
+    grad_AD = AD_gradient(test_fun, θ₀)
+    @test_broken grad_FD[4] ≈ grad_AD[4] # is NaN
+
+    subject = read_pumas(example_data("event_data/data2"), dvs = [:cp])[1]
 
     θ₀ = [1.5, 1.0, 30.0, 5.0]
     param = (θ = θ₀,)
@@ -176,8 +195,119 @@ end
     @test_broken grad_FD[4] ≈ grad_AD[4] # is NaN
 end
 
-@testset "Magic argument - bioav" begin
-    # Test 5 of template_model_ev_system.jl
+@testset "DCP - rate" begin
+    mrate = @model begin
+        @param    θ ∈ VectorDomain(4, lower=zeros(4), init=ones(4))
+        @random   η ~ MvNormal(Matrix{Float64}(I, 2, 2))
+
+        @pre begin
+            Ka = θ[1]
+            CL = θ[2]*exp(η[1])
+            V  = θ[3]*exp(η[2])
+            rate = θ[4]
+        end
+
+        @dynamics begin
+            Depot'   = -Ka*Depot
+            Central' =  Ka*Depot - (CL/V)*Central
+        end
+
+        @derived begin
+            cp = @. Central / V
+            cmax = maximum(cp)
+        end
+    end
+
+    subject = read_pumas(example_data("event_data/data2"), dvs = [:cp])[1]
+
+    θ₀ = [1.5, 1.0, 30.0, 5.0]
+    param = (θ = θ₀,)
+    randeffs = (η = [0.0,0.0],)
+
+    test_fun = function(θ)
+        _param = (θ = θ,)
+        sim = simobs(mrate, subject, _param, randeffs; abstol=1e-14, reltol=1e-14)
+        sim[:cmax]
+    end
+
+    grad_FD = FD_gradient(test_fun, θ₀)
+    grad_AD = AD_gradient(test_fun, θ₀)
+    @test grad_FD[4] ≈ grad_AD[4]
+
+    subject = read_pumas(example_data("event_data/data5"), dvs = [:cp])[1]
+
+    θ₀ = [1.5, 1.0, 30.0, 5.0]
+    param = (θ = θ₀,)
+    randeffs = (η = [0.0,0.0],)
+
+    test_fun = function(θ)
+        _param = (θ = θ,)
+        sim = simobs(mrate, subject, _param, randeffs; abstol=1e-14, reltol=1e-14)
+        sim[:cmax]
+    end
+
+    grad_FD = FD_gradient(test_fun, θ₀)
+    grad_AD = AD_gradient(test_fun, θ₀)
+    @test grad_FD[4] ≈ grad_AD[4]
+end
+
+@testset "DCP - duration" begin
+    mduration = @model begin
+        @param    θ ∈ VectorDomain(4, lower=zeros(4), init=ones(4))
+        @random   η ~ MvNormal(Matrix{Float64}(I, 2, 2))
+
+        @pre begin
+            Ka = θ[1]
+            CL = θ[2]*exp(η[1])
+            V  = θ[3]*exp(η[2])
+            duration = θ[4]
+        end
+
+        @dynamics begin
+            Depot'   = -Ka*Depot
+            Central' =  Ka*Depot - (CL/V)*Central
+        end
+
+        @derived begin
+            cp = @. Central / V
+            cmax = maximum(cp)
+        end
+    end
+
+    subject = read_pumas(example_data("event_data/data2"), dvs = [:cp])[1]
+
+    θ₀ = [1.5, 1.0, 30.0, 5.0]
+    param = (θ = θ₀,)
+    randeffs = (η = [0.0,0.0],)
+
+    test_fun = function(θ)
+        _param = (θ = θ,)
+        sim = simobs(mduration, subject, _param, randeffs; abstol=1e-14, reltol=1e-14)
+        sim[:cmax]
+    end
+
+    grad_FD = FD_gradient(test_fun, θ₀)
+    grad_AD = AD_gradient(test_fun, θ₀)
+    @test grad_FD[4] ≈ grad_AD[4]
+
+    subject = read_pumas(example_data("event_data/data5"), dvs = [:cp])[1]
+
+    θ₀ = [1.5, 1.0, 30.0, 5.0]
+    param = (θ = θ₀,)
+    randeffs = (η = [0.0,0.0],)
+
+    test_fun = function(θ)
+        _param = (θ = θ,)
+        sim = simobs(mduration, subject, _param, randeffs; abstol=1e-14, reltol=1e-14)
+        sim[:cmax]
+    end
+
+    grad_FD = FD_gradient(test_fun, θ₀)
+    grad_AD = AD_gradient(test_fun, θ₀)
+    @test grad_FD[4] ≈ grad_AD[4]
+end
+
+@testset "DCP - bioav" begin
     mbioav = @model begin
         @param    θ ∈ VectorDomain(4, lower=zeros(4), init=ones(4))
         @random   η ~ MvNormal(Matrix{Float64}(I, 2, 2))
@@ -200,8 +330,7 @@ end
         end
     end
 
-    subject = read_pumas(example_data("event_data/data5"),
-                         cvs = [], dvs = [:cp])[1]
+    subject = Subject(evs=DosageRegimen(100))
 
     θ₀ = [1.5, 1.0, 30.0, 0.412]
     param = (θ = θ₀,)
@@ -215,5 +344,52 @@ end
 
     grad_FD = FD_gradient(test_fun, θ₀)
     grad_AD = AD_gradient(test_fun, θ₀)
-    @test_broken grad_FD[4] ≈ grad_AD[4] # is NaN
+    @test grad_FD[4] ≈ grad_AD[4] # is NaN
+
+    subject = Subject(evs=DosageRegimen(100,rate=1))
+
+    θ₀ = [1.5, 1.0, 30.0, 0.412]
+    param = (θ = θ₀,)
+    randeffs = (η = [0.0,0.0],)
+
+    test_fun = function(θ)
+        _param = (θ = θ,)
+        sim = simobs(mbioav, subject, _param, randeffs; abstol=1e-14, reltol=1e-14)
+        sim[:cmax]
+    end
+
+    grad_FD = FD_gradient(test_fun, θ₀)
+    grad_AD = AD_gradient(test_fun, θ₀)
+    @test grad_FD[4] ≈ grad_AD[4]
+
+    subject = Subject(evs=DosageRegimen(100,ss=1,rate=10.0,ii=12,cmt=2))
+    θ₀ = [1.5, 1.0, 30.0, 0.412]
+    param = (θ = θ₀,)
+    randeffs = (η = [0.0,0.0],)
+
+    test_fun = function(θ)
+        _param = (θ = θ,)
+        sim = simobs(mbioav, subject, _param, randeffs; abstol=1e-14, reltol=1e-14)
+        sim[:cmax]
+    end
+
+    grad_FD = FD_gradient(test_fun, θ₀)
+    @test_broken AD_gradient(test_fun, θ₀) isa Vector
+    #@test grad_FD[4] ≈ grad_AD[4]
+
+    # Test 5 of template_model_ev_system.jl
+    subject = read_pumas(example_data("event_data/data5"), dvs = [:cp])[1]
+    θ₀ = [1.5, 1.0, 30.0, 0.412]
+    param = (θ = θ₀,)
+    randeffs = (η = [0.0,0.0],)
+
+    test_fun = function(θ)
+        _param = (θ = θ,)
+        sim = simobs(mbioav, subject, _param, randeffs; abstol=1e-14, reltol=1e-14)
+        sim[:cmax]
+    end
+
+    grad_FD = FD_gradient(test_fun, θ₀)
+    grad_AD = AD_gradient(test_fun, θ₀)
+    @test_broken grad_FD[4] ≈ grad_AD[4]
 end

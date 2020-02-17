@@ -35,6 +35,18 @@ if group == "All" || group == "NLME_ML2"
   end
 end
 
+if group == "All" || group == "NLME_ML3"
+  @time @safetestset "Maximum-likelihood models 3" begin
+    @time @safetestset "Time-varying covariates"                     begin include("tvcov.jl")                  end
+  end
+end
+
+if group == "All" || group == "NLME_ML4"
+  @time @safetestset "Maximum-likelihood models 4" begin
+    @time @safetestset "Medium size ODE system (HCV model)"          begin include("hcv.jl")                    end
+  end
+end
+
 if group == "All" || group == "NLME_Bayes"
   @time @safetestset "Bayesian models"                               begin include("bayes.jl")       end
 end

@@ -3,9 +3,6 @@ const DEFAULT_ESTIMATION_ABSTOL=1e-12
 const DEFAULT_SIMULATION_RELTOL=1e-3
 const DEFAULT_SIMULATION_ABSTOL=1e-6
 
-# Deprecate soon
-@enum ParallelType Serial=1 Threading=2 Distributed=3 SplitThreads=4
-
 """
     PumasModel
 
@@ -85,11 +82,13 @@ Returns a tuple containing the ODE solution `sol` and collation `col`.
 function DiffEqBase.solve(m::PumasModel, subject::Subject,
                           param = init_param(m),
                           randeffs = sample_randeffs(m, param),
+                          args...;
                           saveat = observationtimes(subject),
-                          args...; kwargs...)
+                          callback = nothing,
+                          kwargs...)
   col = m.pre(param, randeffs, subject)
   m.prob === nothing && return NullDESolution(NullDEProblem(col))
-  prob = _problem(m,subject,col,args...;saveat=saveat,kwargs...)
+  prob = _problem(m,subject,col,args...;saveat=saveat,callback=callback,kwargs...)
   alg = m.prob isa ExplicitModel ? nothing : alg=AutoTsit5(Rosenbrock23())
   solve(prob,args...;alg=alg,kwargs...)
 end
@@ -98,6 +97,7 @@ function DiffEqBase.solve(m::PumasModel, pop::Population,
                           param = init_param(m),
                           randeffs = nothing,
                           args...;
+                          callback = nothing,
                           alg=AutoTsit5(Rosenbrock23()),
                           ensemblealg = EnsembleThreads(),
                           kwargs...)
@@ -105,7 +105,7 @@ function DiffEqBase.solve(m::PumasModel, pop::Population,
   function solve_prob_func(prob,i,repeat)
     _randeffs = randeffs === nothing ? sample_randeffs(m, param) : randeffs
     col = m.pre(param, _randeffs, pop[i])
-    _problem(m,pop[i],col,args...;kwargs...)
+    _problem(m,pop[i],col,args...;callback=callback,kwargs...)
   end
   prob = EnsembleProblem(m.prob,prob_func = solve_prob_func)
   solve(prob,alg,ensemblealg,args...;trajectories = length(pop),kwargs...)
@@ -127,7 +127,11 @@ function _problem(m::PumasModel, subject, col, args...;
   elseif m.prob isa AnalyticalPKProblem
     _prob1 = _build_analytical_problem(m, subject, tspan, col, args...;kwargs...)
     pksol = solve(_prob1,args...;kwargs...)
-    _col = (col...,___pk=pksol)
+    function _col(t)
+      col_t = col(t)
+      ___pk = pksol(t)
+      (col=col, ___pk=___pk)
+    end
     u0  = m.init(col, tspan[1])
     _prob = PresetAnalyticalPKProblem(remake(m.prob.prob2; p=_col, u0=u0, tspan=tspan, saveat=saveat),pksol)
   else
@@ -174,17 +178,18 @@ to be repeated in the other API functions
                           # Estimation only uses subject.time for the
                           # observation time series
                           obstimes = subject.time,
+                          callback = nothing,
                           kwargs...)
   # collate that arguments
   collated = m.pre(param, randeffs, subject)
   # create solution object. By passing saveat=obstimes, we compute the solution only
   # at obstimes such that we can simply pass solution.u to m.derived
   _saveat = obstimes === nothing ? Float64[] : obstimes
-  _prob = _problem(m, subject, collated, args...; saveat=_saveat, kwargs...)
+  _prob = _problem(m, subject, collated, args...; saveat=_saveat, callback=callback, kwargs...)
   if _prob isa NullDEProblem
-    dist = m.derived(collated, nothing, obstimes, subject)
+    dist = m.derived(collated, nothing, obstimes, subject, param, randeffs)
   else
-    sol = solve(_prob,args...;reltol=reltol, abstol=abstol, alg=alg, kwargs...)
+    sol = solve(_prob,args...; reltol=reltol, abstol=abstol, alg=alg, kwargs...)
     # if solution contains NaN return Inf
     if (sol.retcode != :Success && sol.retcode != :Terminated) ||
       # FIXME! Make this uniform across the two solution types
@@ -195,7 +200,7 @@ to be repeated in the other API functions
     end
 
     # extract distributions
-    dist = m.derived(collated, sol, obstimes, subject)
+    dist = m.derived(collated, sol, obstimes, subject, param, randeffs)
   end
   dist
 end
@@ -213,7 +218,7 @@ _rand(d) = d
 
 """
     simobs(m::PumasModel, subject::Subject, param[, randeffs, [args...]];
-                  obstimes=observationtimes(subject),kwargs...)
+                  obstimes::AbstractArray=observationtimes(subject),kwargs...)
 
 Simulate random observations from model `m` for `subject` with parameters `param` at
 `obstimes` (by default, use the times of the existing observations for the subject). If no
@@ -224,13 +229,14 @@ function simobs(m::PumasModel, subject::Subject,
                 param = init_param(m),
                 randeffs=sample_randeffs(m, param),
                 args...;
-                obstimes=observationtimes(subject),
+                obstimes::AbstractArray=observationtimes(subject),
+                callback = nothing,
                 saveat=obstimes,kwargs...)
   col = m.pre(_rand(param), randeffs, subject)
-  prob = _problem(m, subject, col, args...; saveat=saveat, kwargs...)
+  prob = _problem(m, subject, col, args...; saveat=saveat, callback=callback, kwargs...)
   alg = m.prob isa ExplicitModel ? nothing : alg=AutoTsit5(Rosenbrock23())
   sol = prob !== nothing ? solve(prob, args...; alg=alg, kwargs...) : nothing
-  derived = m.derived(col,sol,obstimes,subject)
+  derived = m.derived(col,sol,obstimes,subject,param,randeffs)
   obs = m.observed(col,sol,obstimes,map(_rand,derived),subject)
   SimulatedObservations(subject,obstimes,obs)
 end
@@ -241,6 +247,7 @@ function simobs(m::PumasModel, pop::Population,
                 args...;
                 alg=AutoTsit5(Rosenbrock23()),
                 ensemblealg = EnsembleThreads(),
+                callback = nothing,
                 kwargs...)
 
   function simobs_prob_func(prob,i,repeat)
@@ -249,14 +256,14 @@ function simobs(m::PumasModel, pop::Population,
     col = m.pre(_param, _randeffs, pop[i])
     obstimes = :obstimes ∈ keys(kwargs) ? kwargs[:obstimes] : observationtimes(pop[i])
     saveat = :saveat ∈ keys(kwargs) ? kwargs[:saveat] : obstimes
-    _problem(m,pop[i],col,args...; saveat=saveat,kwargs...)
+    _problem(m,pop[i],col,args...; saveat=saveat, callback=callback, kwargs...)
   end
 
   function simobs_output_func(sol,i)
     col = sol.prob.p
     obstimes = :obstimes ∈ keys(kwargs) ? kwargs[:obstimes] : observationtimes(pop[i])
     saveat = :saveat ∈ keys(kwargs) ? kwargs[:saveat] : obstimes
-    derived = m.derived(col,sol,obstimes,pop[i])
+    derived = m.derived(col,sol,obstimes,pop[i],param,randeffs)
     obs = m.observed(col,sol,obstimes,map(_rand,derived),pop[i])
     SimulatedObservations(pop[i],obstimes,obs),false
   end

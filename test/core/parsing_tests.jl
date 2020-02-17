@@ -6,6 +6,12 @@ using Pumas, Test, CSV
 
   @test getproperty.(data[1].events, :time) == 0:12:36
 
+  @testset "Subject comparison" begin
+    datacopy = deepcopy(data)
+    @test data == datacopy
+    @test hash(data) == hash(datacopy)
+  end
+
   for ev in data[1].events
     @test ev.amt == data[1].events[1].amt
     @test ev.evid == data[1].events[1].evid
@@ -37,7 +43,7 @@ end
   @test isa(read_pumas(data), Population)
   append!(data, DataFrame(time = 1, dv = rand(), evid = 0))
   @test_throws AssertionError read_pumas(data)
-  @test_throws AssertionError Subject(obs=DataFrame(x=[2:3;]), time=1:-1:0)
+  @test_throws AssertionError Subject(obs=DataFrame(x=[2:3;], time=1:-1:0))
 end
 @testset "event_data" begin
   data = DataFrame(time = [0, 1, 2, 2], amt = zeros(4), dv = rand(4), evid = 1)

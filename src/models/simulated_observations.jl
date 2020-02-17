@@ -15,13 +15,16 @@ end
 # Convert to Subject
 function Subject(simsubject::SimulatedObservations)
   dvnames = keys(simsubject.subject.observations)
-  subject = Subject(
+  covariates = simsubject.subject.covariates
+  covartime = simsubject.subject.covartime
+  subject = Subject(;
     id         = simsubject.subject.id,
     obs        = NamedTuple{dvnames}(map(k -> simsubject.observed[k], dvnames)),
-    cvs        = map(copy, simsubject.subject.covariates),
+    cvs        = covariates===nothing ? nothing : map(copy, covariates),
     evs        = copy(simsubject.subject.events),
     time       = copy(simsubject.times),
-    event_data = !isnothing(simsubject.subject.events))
+    event_data = !isnothing(simsubject.subject.events),
+    cvstime  = covartime)
   return subject
 end
 
