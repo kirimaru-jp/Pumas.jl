@@ -252,7 +252,7 @@ function simobs(m::PumasModel, pop::Population,
 
   function simobs_prob_func(prob,i,repeat)
     _param = _rand(param)
-    _randeffs = randeffs === nothing ? sample_randeffs(m, _param) : randeffs
+    _randeffs = randeffs === nothing ? sample_randeffs(m, _param) : randeffs[i]
     col = m.pre(_param, _randeffs, pop[i])
     obstimes = :obstimes ∈ keys(kwargs) ? kwargs[:obstimes] : observationtimes(pop[i])
     saveat = :saveat ∈ keys(kwargs) ? kwargs[:saveat] : obstimes
@@ -263,7 +263,8 @@ function simobs(m::PumasModel, pop::Population,
     col = sol.prob.p
     obstimes = :obstimes ∈ keys(kwargs) ? kwargs[:obstimes] : observationtimes(pop[i])
     saveat = :saveat ∈ keys(kwargs) ? kwargs[:saveat] : obstimes
-    derived = m.derived(col,sol,obstimes,pop[i],param,randeffs)
+    _randeffs = randeffs === nothing ? nothing : randeffs[i]
+    derived = m.derived(col,sol,obstimes,pop[i],param,_randeffs)
     obs = m.observed(col,sol,obstimes,map(_rand,derived),pop[i])
     SimulatedObservations(pop[i],obstimes,obs),false
   end
