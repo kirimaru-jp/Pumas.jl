@@ -15,53 +15,106 @@ to_nt(obj::Any) = propertynames(obj) |>
 
 """
     read_pumas(filepath::String, args...; kwargs...)
-    read_pumas(data, cvs=Symbol[], dvs=Symbol[:dv];
-                   id=:id, time=:time, evid=:evid, amt=:amt, addl=:addl,
-                   ii=:ii, cmt=:cmt, rate=:rate, ss=:ss,
+    read_pumas(data; dvs=Symbol[:dv], cvs=Symbol[],
+                   id=:id, time=:time, evid=:evid,
+                   amt=:amt, addl=:addl, ii=:ii, cmt=:cmt,
+                   rate=:rate, ss=:ss,
                    event_data = true)
 
-Import NMTRAN-formatted data.
+Import PREDPP-formatted data.
 
-- `cvs` covariates specified by either names or column numbers
-- `dvs` dependent variables specified by either names or column numbers
+- `dvs` dependent variables specified by column names
+- `cvs` covariates specified by column names
 - `event_data` toggles assertions applicable to event data
 """
 function read_pumas(filepath::AbstractString; kwargs...)
   read_pumas(CSV.read(filepath, missingstrings=["."]) ; kwargs...)
 end
-function read_pumas(data;cvs=Symbol[],dvs=Symbol[:dv],
-                         id=:id, time=:time, evid=:evid, amt=:amt, addl=:addl,
-                         ii=:ii, cmt=:cmt, rate=:rate, ss=:ss,
-                         mdv=:mdv, event_data = true)
-  data = copy(data)
-  colnames = names(data)
+function read_pumas(df::DataFrame;
+  dvs::Vector{Symbol}         = Symbol[:dv],
+  cvs::Vector{Symbol}         = Symbol[],
+  id::Symbol                  = :id,
+  time::Symbol                = :time,
+  evid::Symbol                = :evid,
+  mdv::Union{Symbol,Nothing}  = nothing,
+  amt::Union{Symbol,Nothing}  = nothing,
+  addl::Union{Symbol,Nothing} = nothing,
+  ii::Union{Symbol,Nothing}   = nothing,
+  cmt::Union{Symbol,Nothing}  = nothing,
+  rate::Union{Symbol,Nothing} = nothing,
+  ss::Union{Symbol,Nothing}   = nothing,
+  event_data::Bool            = true)
 
-  if id ∉ colnames
-    data[!,id] .= "1"
-  end
-  if time ∉ colnames
-    data[!,time] .= 0.0
-  end
-  if evid ∉ colnames
-    data[!,evid] .= Int8(0)
-  end
-  if mdv ∉ colnames
-    data[!,mdv] .= Int8(0)
-  end
-  if cvs isa AbstractVector{<:Integer}
-    cvs = colnames[cvs]
-  end
-  if dvs isa AbstractVector{<:Integer}
-    dvs = colnames[dvs]
-  end
-  allowmissing!(data, dvs)
-  mdv = isone.(data[!,mdv])
-  for dv in dvs
-    data[!, dv] .= ifelse.(mdv, missing, data[!, dv])
+  _df = copy(df)
+  colnames = names(_df)
+
+  # Ensure that dv columns allow for missing values
+  allowmissing!(_df, dvs)
+
+  # We'll require that id, time, and evid available in the dataset
+  for invar in (id, time, evid)
+    DataFrames.lookupname(DataFrames.index(df).lookup, invar)
   end
 
-  return [Subject(_databyid, colnames, id, time, evid, amt, addl, ii, cmt,
-                  rate, ss, cvs, dvs, event_data) for _databyid in groupby(data, id)]
+  # For mdv, amt, addl, ii, cmt, rate, and ss we'll use default values if
+  # the user hasn't specified names. If the user has specified names,
+  # we check that the name exists in the input DataFrame
+  if amt === nothing
+    _amt = :amt
+  else
+    DataFrames.lookupname(DataFrames.index(df).lookup, amt)
+    _amt = amt
+  end
+  if addl === nothing
+    _addl = :addl
+  else
+    DataFrames.lookupname(DataFrames.index(df).lookup, addl)
+    _addl = addl
+  end
+  if ii === nothing
+    _ii = :ii
+  else
+    DataFrames.lookupname(DataFrames.index(df).lookup, ii)
+    _ii = ii
+  end
+  if cmt === nothing
+    _cmt = :cmt
+  else
+    DataFrames.lookupname(DataFrames.index(df).lookup, cmt)
+    _cmt = cmt
+  end
+  if rate === nothing
+    _rate = :rate
+  else
+    DataFrames.lookupname(DataFrames.index(df).lookup, rate)
+    _rate = rate
+  end
+  if ss === nothing
+    _ss = :ss
+  else
+    DataFrames.lookupname(DataFrames.index(df).lookup, ss)
+    _ss = ss
+  end
+
+  # Missing variables require special care
+  # Internally in Pumas, we use missing values in the dv column to encode missings
+  if mdv !== nothing
+    # If mdv has been set then we check that the column exists
+    DataFrames.lookupname(DataFrames.index(df).lookup, mdv)
+    for dv in dvs
+      _df[!, dv] .= ifelse.(_df[!, mdv] .== 1, missing, _df[!, dv])
+    end
+  else
+    # Default name for missing values column is mdv
+    if :mdv ∈ colnames
+      for dv in dvs
+        _df[!, dv] .= ifelse.(_df.mdv .== 1, missing, _df[!, dv])
+      end
+    end
+  end
+
+  return [Subject(_databyid, colnames, id, time, evid, _amt, _addl, _ii, _cmt,
+                  _rate, _ss, cvs, dvs, event_data) for _databyid in groupby(_df, id)]
 end
 
 function build_observation_list(obs::AbstractDataFrame)

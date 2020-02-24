@@ -39,14 +39,14 @@ end
   @test data[1].covariates.dih == 2
 end
 @testset "Chronological Observations" begin
-  data = DataFrame(time = [0, 1, 2, 2], dv = rand(4), evid = 0)
+  data = DataFrame(id = 1, time = [0, 1, 2, 2], dv = rand(4), evid = 0)
   @test isa(read_pumas(data), Population)
-  append!(data, DataFrame(time = 1, dv = rand(), evid = 0))
+  append!(data, DataFrame(id = 1, time = 1, dv = rand(), evid = 0))
   @test_throws AssertionError read_pumas(data)
   @test_throws AssertionError Subject(obs=DataFrame(x=[2:3;], time=1:-1:0))
 end
 @testset "event_data" begin
-  data = DataFrame(time = [0, 1, 2, 2], amt = zeros(4), dv = rand(4), evid = 1)
+  data = DataFrame(id = 1, time = [0, 1, 2, 2], amt = zeros(4), dv = rand(4), evid = 1)
   @test_throws AssertionError read_pumas(data)
   @test isa(read_pumas(data, event_data = false), Population)
   @test isa(DosageRegimen(100, rate = -2, cmt = 2, ii = 24, addl = 3), DosageRegimen)
@@ -74,14 +74,16 @@ end
   @test Population(s1, s2, s3) == Population(pop1, pop2, pop3)
 end
 @testset "Missing Observables" begin
-  data = read_pumas(DataFrame(time = [0, 1, 2, 4],
-                                  evid = [1, 1, 0, 0],
-                                  dv1 = [0, 0, 1, missing],
-                                  dv2 = [0, 0, missing, 2],
-                                  x = [missing, missing, 0.5, 0.75],
-                                  amt = [0.25, 0.25, 0, 0]),
-                         cvs = [:x],
-                         dvs = [:dv1, :dv2])
+  data = read_pumas(DataFrame(
+    id = 1,
+    time = [0, 1, 2, 4],
+    evid = [1, 1, 0, 0],
+    dv1 = [0, 0, 1, missing],
+    dv2 = [0, 0, missing, 2],
+    x = [missing, missing, 0.5, 0.75],
+    amt = [0.25, 0.25, 0, 0]),
+    cvs = [:x],
+    dvs = [:dv1, :dv2])
   @test isa(data, Population)
   isa(data[1].observations[1], NamedTuple{(:dv1,:dv2),NTuple{2, Union{Missing,Float64}}})
 end
@@ -95,7 +97,7 @@ end
 end
 
 @testset "MDV" begin
-  data = DataFrame(amt = 10, dv = 0, evid = 0, mdv = 1)
+  data = DataFrame(id = 1, time=0, amt = 10, dv = 0, evid = 0, mdv = 1)
   output = read_pumas(data)
   @test ismissing(output[1].observations.dv[1])
 end
