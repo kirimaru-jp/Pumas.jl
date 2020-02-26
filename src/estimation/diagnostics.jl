@@ -542,17 +542,15 @@ end
 
 function DataFrames.DataFrame(vpred::Vector{<:SubjectPrediction}; include_covariates=true, include_dvs=true)
   subjects = [pred.subject for pred in vpred]
-  df = select!(DataFrame(subjects; include_covariates=include_covariates, include_dvs=include_dvs), Not(:evid))
+  df = DataFrame(subjects; include_covariates=include_covariates, include_dvs=include_dvs)
+  df = df[df[!, :evid].==0, :]
   _keys = keys(first(subjects).observations)
   for name in  _keys
-    df[!, Symbol(string(name)*"_pred")] .= 0.0
-    df[.!ismissing.(df[!, name]),Symbol(string(name)*"_pred")] .= vcat((pred.pred[name] for pred in vpred)...)
-    df[!,Symbol(string(name)*"_ipred")] .= 0.0
-    df[.!ismissing.(df[!, name]),Symbol(string(name)*"_ipred")] .= vcat((pred.ipred[name] for pred in vpred)...)
+    df[!, Symbol(string(name)*"_pred")] = vcat((pred.pred[name] for pred in vpred)...)
+    df[!, Symbol(string(name)*"_ipred")] = vcat((pred.ipred[name] for pred in vpred)...)
     df[!,:pred_approx] .= fill(vpred[1].approx, size(df, 1))
-    df = df[.!ismissing.(df[!, name]), :]
   end
-  df
+  select!(df, Not(:evid))
 end
 
 function empirical_bayes(fpm::FittedPumasModel, approx=fpm.approx)
