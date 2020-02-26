@@ -549,7 +549,7 @@ function DataFrames.DataFrame(vpred::Vector{<:SubjectPrediction}; include_covari
     df[.!ismissing.(df[!, name]),Symbol(string(name)*"_pred")] .= vcat((pred.pred[name] for pred in vpred)...)
     df[!,Symbol(string(name)*"_ipred")] .= 0.0
     df[.!ismissing.(df[!, name]),Symbol(string(name)*"_ipred")] .= vcat((pred.ipred[name] for pred in vpred)...)
-    df[!,:pred_approx] .= fill(vpred[1].approx, size(df, 1)) #vcat((fill(pred.approx, length(pred.subject.time)) for pred in vpred)...)
+    df[!,:pred_approx] .= fill(vpred[1].approx, size(df, 1))
     df = df[.!ismissing.(df[!, name]), :]
   end
   df

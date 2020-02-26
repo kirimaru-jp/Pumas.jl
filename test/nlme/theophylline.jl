@@ -123,6 +123,8 @@ end
   @test predict(o_inspect, theopp)[3].pred.dv ≈ predict(o_inspect)[3].pred.dv
   @test predict(o_inspect, theopp)[3].ipred.dv ≈ predict(o_inspect)[3].ipred.dv
   o_predict_df = DataFrame(o_predict)
+  @test in(:dv, names(o_predict_df))
+
   o_empirical_bayes = empirical_bayes(o)
   o_empirical_bayes_df = DataFrame(o_empirical_bayes)
 
