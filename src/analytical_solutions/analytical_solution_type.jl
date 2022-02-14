@@ -1,3 +1,5 @@
+using DifferentialEquations
+
 struct PKPDAnalyticalSolution{T,N,uType,tType,dType,rType,pType,P} <: DiffEqBase.AbstractAnalyticalSolution{T,N,uType}
   u::uType
   t::tType
