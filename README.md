@@ -15,7 +15,7 @@ Pumas: A Pharmaceutical Modeling and Simulation toolkit
 ## Demo: A Simple PK model
 
 ```julia
-using DiffEqBase
+]add DiffEqBase.jl@6.7
 
 using Pumas, Plots
 ```
